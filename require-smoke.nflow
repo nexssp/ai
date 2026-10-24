@@ -1,0 +1,4 @@
+@description "ai @require module smoke without provider invocation"
+@require ./ { provider: "openai", model: "gpt-4o-mini", api_key_env: "UNUSED_FOR_SMOKE" }
+@assert result.payload == "require-loaded"
+{ payload: "require-loaded" } -> noop

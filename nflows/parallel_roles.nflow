@@ -1,0 +1,38 @@
+@description "Run independent role prompts in parallel, then synthesize their findings"
+@require ../ {
+    provider: "openai",
+    model: "gpt-4o-mini",
+    api_key_env: "OPENAI_API_KEY",
+    timeout: "30s"
+}
+@assert: result.content != ""
+
+(
+    ai.prompt @{
+        system: "ROLE: ANALYST. Identify the reliability trade-offs and likely failure modes.",
+        user: "Assess reliability risks and expected failure modes for a 30-second API timeout.",
+        max_tokens: 250,
+        temperature: 0.2
+    }
+    &
+    ai.prompt @{
+        system: "ROLE: SECURITY. Focus on abuse risks, resource exhaustion, and safe limits.",
+        user: "Assess security and abuse risks of a 30-second API timeout.",
+        max_tokens: 250,
+        temperature: 0.2
+    }
+    &
+    ai.prompt @{
+        system: "ROLE: IMPLEMENTER. Recommend a concrete implementation approach.",
+        user: "Recommend an implementation strategy for a 30-second API timeout.",
+        max_tokens: 250,
+        temperature: 0.2
+    }
+)
+-> {
+    system: "ROLE: SYNTHESIS. Combine the independent findings without dropping important trade-offs.",
+    user: "Combine independent findings in source order:\nAnalyst: " + .["ai.prompt#1"].content + "\nSecurity: " + .["ai.prompt#2"].content + "\nImplementation: " + .["ai.prompt#3"].content,
+    max_tokens: 500,
+    temperature: 0.2
+}
+-> ai.prompt

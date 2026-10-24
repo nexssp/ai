@@ -1,0 +1,20 @@
+@description "Run the reusable ai JSON critic pipeline"
+@require ../ as ai {
+    provider: "openai",
+    model: "gpt-4o-mini",
+    api_key_env: "OPENAI_API_KEY",
+    timeout: "30s"
+}
+@include ai:nflows/lib/critic.nflow AS critic
+@assert {
+    result.content != ""
+    result.model != ""
+}
+@pipeline review
+    critic.pipeline.review
+@end
+@pipeline si_ai_critic
+    critic.pipeline.review
+@end
+
+pipeline.si_ai_critic
