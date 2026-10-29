@@ -1,7 +1,5 @@
 # Nexss AI
 
-<small>Nexss Flow 🌀 ready</small>
-
 Reusable Go packages for LLM providers, Nexss Flow workflows, and host-integrated conversation memory.
 
 The repository is the Go module [`github.com/nexssp/ai`](https://github.com/nexssp/ai). The current source is on `main`; no release tag is assumed here. Until a release is published, Go consumers can select the branch with `@main` (or pin a commit for reproducible builds).
@@ -131,10 +129,6 @@ The critic asks `ai.prompt` for JSON text with `approved`, `score`, `critique`, 
 
 The `memory` package is a host-side service, not a `.nflow` bundle. It combines recent scoped turns from a `WorkingStore` with optional relevant results from a `LongTermStore`, constructs the prompt, and calls an injected `Completer`. Redis is the included working-history backend; applications provide their own semantic-memory adapter and LLM completer. Importance-based promotion uses a simple keyword scorer by default, which can be replaced with an application-specific scorer. There is no built-in LEANN adapter, scheduler, or active-scope discovery. See [`memory/README.md`](memory/README.md) for setup, request flow, promotion, and failure handling.
 
-## Known build gap on current `main`
-
-The `memory` package imports `github.com/redis/go-redis/v9` in [`memory/redis.go`](memory/redis.go), but the root [`go.mod`](go.mod) does not currently declare that dependency. Consequently, repository-wide `go build ./...` and `go test ./...` stop during dependency resolution. This README update is documentation-only and does not change the module manifest; fix the dependency declaration before relying on full-repository checks. The LLM and Flow packages can be tested separately while this is unresolved.
-
 ## Development
 
 The repository's contribution guide routes development checks through [Task](https://taskfile.dev); see [`CONTRIBUTING.md`](CONTRIBUTING.md) for tool setup and contribution rules. Useful targets include:
@@ -145,4 +139,4 @@ task test
 task ci
 ```
 
-`task test` runs the short Go test suite; `task ci` runs lint and uncached race-enabled tests. These full-repository targets are subject to the Redis dependency gap noted above. Tests use fake providers and do not require live LLM credentials. The project is licensed under [Apache-2.0](LICENSE).
+`task test` runs the short Go test suite; `task ci` runs lint and uncached race-enabled tests. Tests use fake providers and do not require live LLM credentials. The project is licensed under [Apache-2.0](LICENSE).

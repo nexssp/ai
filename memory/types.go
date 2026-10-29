@@ -38,8 +38,8 @@ type SearchHit struct {
 	Score float64 `json:"score,omitempty"`
 }
 
-// Record is an idempotently upserted long-term memory. ID is derived from
-// the source turn, so a retried promotion replaces rather than duplicates it.
+// Record is an idempotently upserted long-term memory. ID is derived from the
+// source turn, so a retried promotion replaces rather than duplicates it.
 type Record struct {
 	ID         string    `json:"id"`
 	Scope      Scope     `json:"scope"`
@@ -49,6 +49,13 @@ type Record struct {
 	CreatedAt  time.Time `json:"created_at"`
 	Reason     string    `json:"reason"`
 }
+
+// MemoryRecord is a compatibility alias for Record.
+
+// Deprecated: use Record.
+//
+//nolint:revive // Preserve source compatibility with existing callers.
+type MemoryRecord = Record
 
 // Message is a role/content pair in the prompt sent to a chat model.
 type Message struct {

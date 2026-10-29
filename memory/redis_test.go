@@ -39,6 +39,26 @@ func TestRedisWorkingStoreBoundsHistoryAndIsolatesScopes(t *testing.T) {
 	ktest.RequireEqual(t, other[0].ID, "other")
 }
 
+func TestRedisWorkingStoreRejectsNULContainingScopes(t *testing.T) {
+	t.Parallel()
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store, err := NewRedisWorkingStore(client, RedisConfig{Prefix: "test:memory"})
+	ktest.RequireNoError(t, err)
+
+	// These tuples produce the same old NUL-joined key identity: "a\x00b\x00c".
+	for _, scope := range []Scope{
+		{UserID: "a\x00b", ConversationID: "c"},
+		{UserID: "a", ConversationID: "b\x00c"},
+	} {
+		err := store.Append(context.Background(), scope, Turn{ID: "turn"})
+		ktest.RequireCondition(t, err != nil, "scope containing NUL should be rejected")
+		_, err = store.Recent(context.Background(), scope, 1)
+		ktest.RequireCondition(t, err != nil, "reading a scope containing NUL should be rejected")
+	}
+}
+
 func TestRedisWorkingStoreOlderAndDeleteSpecificTurns(t *testing.T) {
 	t.Parallel()
 	server := miniredis.RunT(t)

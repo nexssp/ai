@@ -71,7 +71,7 @@ func (s *testWorkingStore) Delete(_ context.Context, scope Scope, turnIDs []stri
 
 type testSemanticStore struct {
 	hits     []SearchHit
-	records  []Record
+	records  []MemoryRecord
 	searched Scope
 }
 
@@ -80,7 +80,7 @@ func (s *testSemanticStore) Search(_ context.Context, scope Scope, _ string, _ i
 	return append([]SearchHit(nil), s.hits...), nil
 }
 
-func (s *testSemanticStore) Upsert(_ context.Context, record Record) error {
+func (s *testSemanticStore) Upsert(_ context.Context, record MemoryRecord) error {
 	s.records = append(s.records, record)
 	return nil
 }
@@ -194,4 +194,25 @@ func TestReplyRequiresCompleteScope(t *testing.T) {
 	ktest.RequireNoError(t, err)
 	_, err = service.Reply(context.Background(), Request{Scope: Scope{UserID: "u"}, UserMessage: "hello"})
 	ktest.RequireCondition(t, err != nil, "incomplete scope should fail")
+}
+
+func TestMemoryServiceRejectsNULContainingScopeIdentifiers(t *testing.T) {
+	t.Parallel()
+	working := newTestWorkingStore()
+	service, err := NewService(Config{}, working, &testSemanticStore{}, CompleteFunc(func(context.Context, []Message) (string, error) {
+		return "unexpected", nil
+	}))
+	ktest.RequireNoError(t, err)
+
+	// These tuples collide when UserID and ConversationID are joined by NUL.
+	for _, scope := range []Scope{
+		{UserID: "a\x00b", ConversationID: "c"},
+		{UserID: "a", ConversationID: "b\x00c"},
+	} {
+		_, err := service.Reply(context.Background(), Request{Scope: scope, UserMessage: "hello"})
+		ktest.RequireCondition(t, err != nil, "reply with NUL-containing scope should fail")
+		_, err = service.PromoteOlder(context.Background(), scope, time.Now(), 1)
+		ktest.RequireCondition(t, err != nil, "promotion with NUL-containing scope should fail")
+	}
+	ktest.RequireEqual(t, len(working.turns), 0)
 }

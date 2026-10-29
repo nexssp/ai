@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/nexssp/cost v0.6.0
-	github.com/nexssp/flow v0.51.0
+	github.com/nexssp/flow v0.50.0
 	github.com/nexssp/kernel v0.36.0
 	github.com/nexssp/transport v0.9.1
 	github.com/redis/go-redis/v9 v9.23.0

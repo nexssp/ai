@@ -1,6 +1,6 @@
 # Hybrid conversation memory
 
-`extensions/memory` is a host-side Go service for applications built with Flow. It combines a bounded Redis working history with an injected long-term semantic store and a model completer. It is deliberately not a `.nflow` DSL bundle: the host owns the LLM and storage connections and supplies them when constructing the service.
+The `memory` package is a host-side Go service for applications built with Flow. It combines a bounded Redis working history with an injected long-term semantic store and a model completer. It is deliberately not a `.nflow` DSL bundle: the host owns the LLM and storage connections and supplies them when constructing the service.
 
 ## Request flow
 

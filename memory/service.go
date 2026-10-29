@@ -236,6 +236,9 @@ func validateScope(scope Scope) error {
 	if strings.TrimSpace(scope.ConversationID) == "" {
 		return xerr.Validation("memory: scope conversation ID is required")
 	}
+	if strings.ContainsRune(scope.UserID, '\x00') || strings.ContainsRune(scope.ConversationID, '\x00') {
+		return xerr.Validation("memory: scope identifiers must not contain NUL characters")
+	}
 	return nil
 }
 
