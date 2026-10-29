@@ -3,7 +3,7 @@ package llm
 import "sort"
 
 // IsKnownProvider reports whether a provider name is present in the
-// preset catalogue. It is used by the @llm directive to reject
+// preset catalog. It is used by the @llm directive to reject
 // misspelled provider names at compile time.
 func IsKnownProvider(name string) bool {
 	_, ok := Presets[name]
@@ -13,7 +13,7 @@ func IsKnownProvider(name string) bool {
 	// A few additional canonical names map to the same backends but are
 	// not separate presets.
 	switch name {
-	case "anthropic", "claude", "gemini", "google":
+	case providerAnthropic, "claude", providerGemini, "google":
 		return true
 	}
 	return false
@@ -26,7 +26,7 @@ func KnownProviders() []string {
 	for name := range Presets {
 		seen[name] = true
 	}
-	for _, name := range []string{"anthropic", "claude", "gemini", "google"} {
+	for _, name := range []string{providerAnthropic, "claude", providerGemini, "google"} {
 		seen[name] = true
 	}
 	out := make([]string, 0, len(seen))

@@ -89,7 +89,7 @@ func TestDoJSONTransportErrorKindsAndCauses(t *testing.T) {
 					if !readBody {
 						return nil, tc.cause
 					}
-					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: failingResponseBody{tc.cause}}, nil
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: failingResponseBody{tc.cause}}, nil
 				})}
 				_, err := DoJSON[map[string]any](t.Context(), HTTPRequest{URL: "http://fake.invalid", Client: client, Codec: codec.Default})
 				requireHTTPErrorKind(t, err, tc.kind)
@@ -120,7 +120,7 @@ func TestDoJSONInternalDefects(t *testing.T) {
 
 func TestDoJSONSuccessfulResponse(t *testing.T) {
 	client := &http.Client{Transport: errorRoundTripper(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"answer":"ok"}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"answer":"ok"}`))}, nil
 	})}
 	got, err := DoJSON[map[string]string](t.Context(), HTTPRequest{URL: "http://fake.invalid", Client: client, Codec: codec.Default})
 	if err != nil || got["answer"] != "ok" {

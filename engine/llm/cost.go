@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nexssp/cost"
+	"github.com/nexssp/kernel/xerr"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,7 +73,9 @@ func NewPriceCatalog() *PriceCatalog {
 	c := &PriceCatalog{
 		cards: make(map[string]PriceCard, 64),
 	}
-	_ = c.LoadFromYAML([]byte(DefaultPricingTemplate))
+	if err := c.LoadFromYAML([]byte(DefaultPricingTemplate)); err != nil {
+		panic(err)
+	}
 
 	return c
 }
@@ -171,7 +175,7 @@ func (c *PriceCatalog) LoadFromYAML(data []byte) error {
 
 	var oldFmt map[string]Price
 	if err := yaml.Unmarshal(data, &oldFmt); err != nil {
-		return fmt.Errorf("price catalog: unmarshal yaml: %w", err)
+		return xerr.BadRequest("price catalog: unmarshal yaml", err)
 	}
 
 	c.mu.Lock()
@@ -201,7 +205,11 @@ type cardYAML struct {
 func (c *PriceCatalog) LoadFromFile(filePath string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("price catalog: read %s: %w", filePath, err)
+		message := "price catalog: read " + filePath
+		if errors.Is(err, os.ErrNotExist) {
+			return xerr.NotFound(message, err)
+		}
+		return xerr.Unavailable(message, err)
 	}
 
 	return c.LoadFromYAML(data)
@@ -210,24 +218,24 @@ func (c *PriceCatalog) LoadFromFile(filePath string) error {
 func (c *PriceCatalog) LoadFromURL(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return fmt.Errorf("price catalog: create url request: %w", err)
+		return xerr.BadRequest("price catalog: create URL request", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("price catalog: fetch url: %w", err)
+		return xerr.Unavailable("price catalog: fetch URL", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("price catalog: fetch url returned status %d", resp.StatusCode)
+		return xerr.Unavailable(fmt.Sprintf("price catalog: fetch URL returned status %d", resp.StatusCode))
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("price catalog: read url body: %w", err)
+		return xerr.Unavailable("price catalog: read URL body", err)
 	}
 
 	return c.LoadFromYAML(data)
@@ -237,19 +245,21 @@ func (c *PriceCatalog) LoadFromURL(ctx context.Context, url string) error {
 func InitPricingFile(filePath string, force bool) (string, error) {
 	if !force {
 		if _, err := os.Stat(filePath); err == nil {
-			return "", fmt.Errorf("pricing file %q already exists", filePath)
+			return "", xerr.Conflict(fmt.Sprintf("pricing file %q already exists", filePath))
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", xerr.Unavailable("price catalog: check existing pricing file", err)
 		}
 	}
 
 	dir := filepath.Dir(filePath)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("create pricing directory: %w", err)
+			return "", xerr.Unavailable("price catalog: create pricing directory", err)
 		}
 	}
 
 	if err := os.WriteFile(filePath, []byte(DefaultPricingTemplate), 0o600); err != nil {
-		return "", fmt.Errorf("write default pricing file: %w", err)
+		return "", xerr.Unavailable("price catalog: write default pricing file", err)
 	}
 
 	return filePath, nil
@@ -283,10 +293,7 @@ func CalculateCost(
 		rate = *card.OffPeak
 	}
 
-	missTokens := promptTokens - cachedTokens
-	if missTokens < 0 {
-		missTokens = 0
-	}
+	missTokens := max(0, promptTokens-cachedTokens)
 
 	hitTokens := promptTokens - missTokens
 

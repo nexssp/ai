@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 
@@ -41,15 +42,18 @@ func (m *MoEProvider) Complete(ctx context.Context, req Request) (Response, erro
 	}
 
 	// Automatic fallback to available experts if default provider fails
+	fallbackErrors := []error{withErrorContext("moe: default provider failed", err)}
 	for name, expert := range m.experts {
-		if res, expErr := expert.Complete(ctx, req); expErr == nil {
+		res, expErr := expert.Complete(ctx, req)
+		if expErr == nil {
 			res.Model = name + " (expert fallback)"
 
 			return res, nil
 		}
+		fallbackErrors = append(fallbackErrors, withErrorContext(fmt.Sprintf("moe: expert %q failed", name), expErr))
 	}
 
-	return Response{}, xerr.Unavailable("moe: all expert providers failed", err)
+	return Response{}, xerr.Unavailable("moe: all expert providers failed", errors.Join(fallbackErrors...))
 }
 
 func (m *MoEProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
@@ -65,26 +69,31 @@ func (m *MoEProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string
 func (m *MoEProvider) Preload(ctx context.Context, _ string) error {
 	for name, expert := range m.experts {
 		if err := Preload(ctx, expert, ""); err != nil {
-			return fmt.Errorf("moe: expert %q preload failed: %w", name, err)
+			return withErrorContext(fmt.Sprintf("moe: expert %q preload failed", name), err)
 		}
 	}
 
-	return Preload(ctx, m.defaultProv, "")
+	if err := Preload(ctx, m.defaultProv, ""); err != nil {
+		return withErrorContext("moe: default provider preload failed", err)
+	}
+	return nil
 }
 
 func (m *MoEProvider) Unload(ctx context.Context, _ string) error {
-	var firstErr error
+	var unloadErrors []error
 	for name, expert := range m.experts {
-		if err := Unload(ctx, expert, ""); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("moe: expert %q unload failed: %w", name, err)
+		if err := Unload(ctx, expert, ""); err != nil {
+			unloadErrors = append(unloadErrors, withErrorContext(fmt.Sprintf("moe: expert %q unload failed", name), err))
 		}
 	}
 
-	if err := Unload(ctx, m.defaultProv, ""); err != nil && firstErr == nil {
-		firstErr = err
+	if err := Unload(ctx, m.defaultProv, ""); err != nil {
+		unloadErrors = append(unloadErrors, withErrorContext("moe: default provider unload failed", err))
 	}
-
-	return firstErr
+	if len(unloadErrors) == 0 {
+		return nil
+	}
+	return xerr.Unavailable("moe: one or more providers failed to unload", errors.Join(unloadErrors...))
 }
 
 func (m *MoEProvider) IsLoaded(ctx context.Context, _ string) bool {

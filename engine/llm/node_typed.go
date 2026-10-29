@@ -144,15 +144,17 @@ func stripCodeFence(s string) string {
 
 	// Skip the opening fence and its optional language tag up to the
 	// first newline. If there is no newline, the input is not a fence.
-	nl := strings.IndexByte(s, '\n')
-	if nl < 0 {
+	before, _, ok := strings.Cut(s, "\n")
+	if !ok {
 		return s
 	}
+	nl := len(before)
 
 	body := s[nl+1:]
 
-	end := strings.LastIndex(body, "```")
-	if end < 0 {
+	before, _, ok = strings.CutLast(body, "```")
+	end := len(before)
+	if !ok {
 		return body
 	}
 

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"slices"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/transport/thttp"
@@ -71,22 +72,9 @@ func BuildMoEAdminActions(cfg MoEAdminConfig) []action.AnyAction {
 		Build()
 
 	models := action.New("moe.models.list", func(ctx context.Context, req MoEModelsReq) (MoEModelsRes, error) {
-		if len(cfg.KnownProviders) > 0 {
-			ok := false
-
-			for _, p := range cfg.KnownProviders {
-				if p == req.Provider {
-					ok = true
-
-					break
-				}
-			}
-
-			if !ok {
-				return MoEModelsRes{}, nil
-			}
+		if len(cfg.KnownProviders) > 0 && !slices.Contains(cfg.KnownProviders, req.Provider) {
+			return MoEModelsRes{}, nil
 		}
-
 		list, err := FetchModels(ctx, req.Provider, req.APIKey, req.BaseURL)
 		if err != nil {
 			return MoEModelsRes{}, err

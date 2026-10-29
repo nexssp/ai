@@ -3,14 +3,17 @@ module github.com/nexssp/ai
 go 1.27.3
 
 require (
+	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/nexssp/cost v0.6.0
-	github.com/nexssp/flow v0.50.0
+	github.com/nexssp/flow v0.51.0
 	github.com/nexssp/kernel v0.36.0
 	github.com/nexssp/transport v0.9.1
+	github.com/redis/go-redis/v9 v9.23.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
@@ -20,6 +23,8 @@ require (
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/nexssp/validation v0.3.0 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
+	go.uber.org/atomic v1.12.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

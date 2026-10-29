@@ -29,7 +29,7 @@ func (p *fakeProvider) Complete(_ context.Context, req llm.Request) (llm.Respons
 }
 
 func (p *fakeProvider) Stream(context.Context, llm.Request) (iter.Seq2[string, error], error) {
-	return func(yield func(string, error) bool) {}, nil
+	return func(_ func(string, error) bool) {}, nil
 }
 
 func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
@@ -59,10 +59,10 @@ func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	if _, ok := cfg.Resolver.Action("ai.prompt"); !ok {
+	if _, promptActionOK := cfg.Resolver.Action("ai.prompt"); !promptActionOK {
 		t.Fatal("ai.prompt was not mounted in the Flow resolver")
 	}
-	if _, ok := cfg.Resolver.Action("ai.team"); !ok {
+	if _, teamActionOK := cfg.Resolver.Action("ai.team"); !teamActionOK {
 		t.Fatal("ai.team was not mounted in the Flow resolver")
 	}
 
@@ -91,7 +91,7 @@ func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
 
 func TestPromptActionRequiresUserWithoutCompletion(t *testing.T) {
 	provider := &fakeProvider{}
-	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+	act := newPromptActionWith(GlobalOptions{}, func(_ GlobalOptions, _ LLMDecl) (llm.Provider, error) {
 		return provider, nil
 	})
 	_, err := act.DoAny(context.Background(), map[string]any{"system": "system only"})
@@ -112,7 +112,7 @@ func TestBundleDeclaresAndValidatesRequireOptions(t *testing.T) {
 
 	_, err := require.ResolveBundles([]require.Requirement{{
 		Import:  ID,
-		Options: map[string]string{"defualt_model": "typo"},
+		Options: map[string]string{"default_model": "typo"},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "unknown option") {
 		t.Fatalf("unknown @require option error = %v, want explicit option validation", err)

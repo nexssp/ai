@@ -109,7 +109,7 @@ func (p *GeminiProvider) Name() string {
 		return p.cfg.Name
 	}
 
-	return "gemini"
+	return providerGemini
 }
 
 func (p *GeminiProvider) Complete(ctx context.Context, req Request) (Response, error) {
@@ -142,9 +142,11 @@ func (p *GeminiProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(resp.Body)
+		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-
+		if readErr != nil {
+			return nil, xerr.Unavailable("gemini: read stream error response", readErr)
+		}
 		return nil, xerr.Unavailable(fmt.Sprintf("gemini: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
 	}
 
@@ -172,9 +174,9 @@ func (p *GeminiProvider) buildPayload(req Request) map[string]any {
 		if m.Role == RoleSystem {
 			sysInstruction = &content{Parts: []part{{Text: m.Content}}}
 		} else {
-			role := "user"
+			role := roleUser
 			if m.Role == RoleAssistant {
-				role = "model"
+				role = roleModel
 			}
 
 			contents = append(contents, content{

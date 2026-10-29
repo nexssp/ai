@@ -22,9 +22,9 @@ var discoveryClient = &http.Client{
 // FetchModels queries an upstream provider for its active model catalog.
 func FetchModels(ctx context.Context, providerType, apiKey, baseURL string) ([]string, error) {
 	switch strings.ToLower(providerType) {
-	case "ollama", "ollama_cloud":
+	case providerOllama, "ollama_cloud":
 		return fetchOllamaModels(ctx, apiKey, baseURL)
-	case "openai", "groq", "nvidia", "nim", "deepseek", "openrouter", "gemini", "lmstudio", "local", "vllm", "vast":
+	case providerOpenAI, "groq", providerNVIDIA, "nim", providerDeepSeek, providerOpenRouter, providerGemini, providerLMStudio, "local", "vllm", "vast":
 		return fetchOpenAIModels(ctx, providerType, apiKey, baseURL)
 	default:
 		return getFallbackModels(providerType), nil
@@ -36,7 +36,7 @@ func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, e
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return getFallbackModels("ollama"), err
+		return getFallbackModels(providerOllama), err
 	}
 
 	if apiKey != "" {
@@ -49,7 +49,7 @@ func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, e
 			_ = resp.Body.Close()
 		}
 
-		return getFallbackModels("ollama"), nil
+		return getFallbackModels(providerOllama), nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -68,7 +68,7 @@ func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, e
 		return list, nil
 	}
 
-	return getFallbackModels("ollama"), nil
+	return getFallbackModels(providerOllama), nil
 }
 
 func fetchOpenAIModels(ctx context.Context, pType, apiKey, baseURL string) ([]string, error) {
@@ -143,13 +143,13 @@ func resolveProviderURL(providerType, baseURL string) string {
 	switch strings.ToLower(providerType) {
 	case "groq":
 		return "https://api.groq.com/openai/v1/models"
-	case "nvidia", "nim":
+	case providerNVIDIA, "nim":
 		return "https://integrate.api.nvidia.com/v1/models"
-	case "deepseek":
+	case providerDeepSeek:
 		return "https://api.deepseek.com/models"
-	case "openrouter":
+	case providerOpenRouter:
 		return "https://openrouter.ai/api/v1/models"
-	case "lmstudio", "local":
+	case providerLMStudio, "local":
 		return "http://127.0.0.1:1234/v1/models"
 	case "vllm", "vast":
 		return "http://localhost:8000/v1/models"
@@ -162,18 +162,18 @@ func getFallbackModels(providerType string) []string {
 	switch strings.ToLower(providerType) {
 	case "groq":
 		return []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"}
-	case "nvidia", "nim":
+	case providerNVIDIA, "nim":
 		return []string{"meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct", "deepseek-ai/deepseek-r1"}
-	case "ollama":
-		return []string{"qwen2.5-coder:7b", "mistral:latest", "llama3.2:3b"}
-	case "deepseek":
+	case providerOllama:
+		return []string{defaultOllamaModel, "mistral:latest", "llama3.2:3b"}
+	case providerDeepSeek:
 		return []string{"deepseek-chat", "deepseek-reasoner"}
-	case "openrouter":
+	case providerOpenRouter:
 		return []string{"meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen-2.5-coder-32b-instruct"}
-	case "gemini":
+	case providerGemini:
 		return []string{"gemini-2.0-flash", "gemini-1.5-pro"}
-	case "lmstudio", "local", "vllm", "vast":
-		return []string{"google/gemma-2-9b", "qwen2.5-coder:7b"}
+	case providerLMStudio, "local", "vllm", "vast":
+		return []string{"google/gemma-2-9b", defaultOllamaModel}
 	default:
 		return []string{"gpt-4o-mini", "gpt-4o"}
 	}

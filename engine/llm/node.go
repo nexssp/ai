@@ -30,7 +30,7 @@ func cleanJSONPayload(raw string) []byte {
 	return []byte(trimmed)
 }
 
-func NewNode(id, outputKey string, p Provider, systemPrompt, userPromptTmpl string) action.AnyAction {
+func NewNode(id, _ string, p Provider, systemPrompt, userPromptTmpl string) action.AnyAction {
 	parsedTmpl := template.Must(template.New(id).Parse(userPromptTmpl))
 
 	return action.New(id, func(ctx context.Context, nCtx *dag.NodeContext) (string, error) {
@@ -55,7 +55,7 @@ func NewNode(id, outputKey string, p Provider, systemPrompt, userPromptTmpl stri
 	}).Build()
 }
 
-func NewStructuredNode[T any](id, outputKey string, p Provider, systemPrompt, userPromptTmpl string) action.AnyAction {
+func NewStructuredNode[T any](id, _ string, p Provider, systemPrompt, userPromptTmpl string) action.AnyAction {
 	parsedTmpl := template.Must(template.New(id).Parse(userPromptTmpl))
 
 	return action.New(id, func(ctx context.Context, nCtx *dag.NodeContext) (T, error) {

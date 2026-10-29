@@ -14,7 +14,7 @@ func init() {
 	// Register a Kernel hook following the pattern used by Flow's hook extension.
 	action.MustRegisterHook("ai.error_analyzer", func() action.AnyHook {
 		return action.AnyHook{
-			OnError: func(ctx context.Context, req any, err error, meta *action.Meta) {
+			OnError: func(ctx context.Context, _ any, _ error, _ *action.Meta) {
 				// Clone the context for asynchronous analysis so the request path does not wait for it.
 				bgCtx := xctx.CloneForAsync(ctx)
 				go func(_ context.Context) {

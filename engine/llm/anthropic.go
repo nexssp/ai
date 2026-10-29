@@ -70,8 +70,8 @@ func NewAnthropic(cfg Config) *AnthropicProvider {
 		payload := p.buildPayload(req, false)
 
 		headers := map[string]string{
-			"x-api-key":         p.cfg.APIKey,
-			"anthropic-version": "2023-06-01",
+			"X-Api-Key":         p.cfg.APIKey,
+			"Anthropic-Version": "2023-06-01",
 		}
 
 		raw, err := DoJSON[anthropicWireResponse](ctx, HTTPRequest{
@@ -115,7 +115,7 @@ func (p *AnthropicProvider) Name() string {
 		return p.cfg.Name
 	}
 
-	return "anthropic"
+	return providerAnthropic
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response, error) {
@@ -142,8 +142,8 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (iter.Seq2[
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.cfg.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("X-Api-Key", p.cfg.APIKey)
+	httpReq.Header.Set("Anthropic-Version", "2023-06-01")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -151,9 +151,11 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (iter.Seq2[
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(resp.Body)
+		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-
+		if readErr != nil {
+			return nil, xerr.Unavailable("anthropic: read stream error response", readErr)
+		}
 		return nil, xerr.Unavailable(fmt.Sprintf("anthropic: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
 	}
 
@@ -187,9 +189,9 @@ func (p *AnthropicProvider) buildPayload(req Request, stream bool) map[string]an
 	}
 
 	payload := map[string]any{
-		"model":      req.Model,
-		"max_tokens": maxTokens,
-		"messages":   messages,
+		jsonKeyModel:    req.Model,
+		"max_tokens":    maxTokens,
+		jsonKeyMessages: messages,
 	}
 	if len(systemPrompts) > 0 {
 		payload["system"] = strings.Join(systemPrompts, "\n\n")

@@ -22,8 +22,8 @@ func requireKind(t *testing.T, err error, want xerr.Kind) *xerr.AppError {
 	if err == nil {
 		t.Fatalf("expected %s error", want)
 	}
-	var app *xerr.AppError
-	if !errors.As(err, &app) {
+	app, ok := errors.AsType[*xerr.AppError](err)
+	if !ok {
 		t.Fatalf("error type %T (%v), want *xerr.AppError", err, err)
 	}
 	if app.Kind != want {
@@ -60,9 +60,9 @@ func TestOptionsTimeoutValidation(t *testing.T) {
 }
 
 func TestOptionsRejectUnknownRequireOption(t *testing.T) {
-	_, err := options(map[string]string{"defualt_model": "model-name"})
+	_, err := options(map[string]string{"default_model": "model-name"})
 	ae := requireKind(t, err, xerr.KindValidation)
-	if !strings.Contains(ae.Message, "unknown @require option \"defualt_model\"") {
+	if !strings.Contains(ae.Message, "unknown @require option \"default_model\"") {
 		t.Fatalf("unexpected unknown-option message: %q", ae.Message)
 	}
 }
@@ -221,7 +221,7 @@ func TestTypedCompletionErrorAndUnknownProviderValidation(t *testing.T) {
 		provider := &errorFakeProvider{fakeProvider: &fakeProvider{}, err: fmt.Errorf("wrapped typed: %w", typed)}
 		_, err := actionFor(t, name, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil }).DoAny(context.Background(), requestFor(name))
 		ae := requireKind(t, err, xerr.KindValidation)
-		if !errors.Is(err, typed) || !errors.As(err, new(*xerr.AppError)) || len(ae.ValidationDetails) != 1 || ae.ValidationDetails[0].Field != "prompt" {
+		if _, ok := errors.AsType[*xerr.AppError](err); !errors.Is(err, typed) || !ok || len(ae.ValidationDetails) != 1 || ae.ValidationDetails[0].Field != "prompt" {
 			t.Fatalf("typed completion error lost in %s: %#v", name, ae)
 		}
 	}
@@ -257,8 +257,8 @@ func TestAllTypedKindsSurviveBuilderAndCompletion(t *testing.T) {
 							_, err = actionFor(t, name, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil }).DoAny(context.Background(), requestFor(name))
 						}
 						ae := requireKind(t, err, kind)
-						var found *xerr.AppError
-						if !errors.Is(err, sentinel) || !errors.Is(err, original) || !errors.Is(err, wrapped) || !errors.As(err, &found) || found.Kind != kind {
+						found, foundOK := errors.AsType[*xerr.AppError](err)
+						if !errors.Is(err, sentinel) || !errors.Is(err, original) || !errors.Is(err, wrapped) || !foundOK || found.Kind != kind {
 							t.Fatalf("typed chain not preserved: %v", err)
 						}
 						if len(ae.ValidationDetails) != 1 || ae.ValidationDetails[0].Field != "x" {

@@ -1,0 +1,66 @@
+name: Go CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: format · build · vet · lint · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
+            echo "::error::go.mod or go.sum is not tidy. Run 'go mod tidy' locally and commit the result."
+            git status --porcelain -- go.mod go.sum
+            git diff -- go.mod go.sum
+            exit 1
+          fi
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          install-only: true
+
+      - name: Validate golangci-lint configuration
+        run: golangci-lint config verify
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          diff="$(golangci-lint fmt --diff)"
+          if [[ -n "$diff" ]]; then
+            printf '%s\n' "$diff"
+            echo "::error::Go source is not formatted. Run 'golangci-lint fmt'."
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+      - name: Run race-enabled tests
+        run: go test -race -count=1 ./...

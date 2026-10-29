@@ -15,8 +15,7 @@ func completionError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var typed *xerr.AppError
-	if errors.As(err, &typed) {
+	if appErr, ok := errors.AsType[*xerr.AppError](err); ok && appErr != nil {
 		return err
 	}
 	return xerr.From(err)
@@ -41,11 +40,9 @@ func requireProvider(provider llm.Provider) error {
 		return xerr.Internal("ai: provider builder returned a nil provider")
 	}
 	value := reflect.ValueOf(provider)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		if value.IsNil() {
-			return xerr.Internal("ai: provider builder returned a nil provider")
-		}
+	kind := value.Kind()
+	if (kind == reflect.Chan || kind == reflect.Func || kind == reflect.Interface || kind == reflect.Map || kind == reflect.Pointer || kind == reflect.Slice || kind == reflect.UnsafePointer) && value.IsNil() {
+		return xerr.Internal("ai: provider builder returned a nil provider")
 	}
 	return nil
 }

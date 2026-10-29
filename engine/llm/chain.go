@@ -11,7 +11,7 @@ import (
 
 type ProviderChain struct {
 	providers   []Provider
-	activeIdx   atomic.Uint32
+	activeIdx   atomic.Int64
 	cooldowns   []atomic.Int64
 	failCounts  []atomic.Uint32
 	switchCount atomic.Uint64
@@ -42,7 +42,7 @@ func (c *ProviderChain) Name() string {
 		return "empty_chain"
 	}
 
-	idx := c.activeIdx.Load() % uint32(total)
+	idx := int(c.activeIdx.Load() % int64(total))
 
 	return c.providers[idx].Name()
 }
@@ -62,7 +62,7 @@ func (c *ProviderChain) Complete(ctx context.Context, req Request) (Response, er
 
 	var lastErr error
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		curr := (startIdx + i) % total
 		if c.cooldowns[curr].Load() > now && i < total-1 {
 			continue
@@ -72,8 +72,8 @@ func (c *ProviderChain) Complete(ctx context.Context, req Request) (Response, er
 		if err == nil {
 			c.failCounts[curr].Store(0)
 
-			if uint32(curr) != c.activeIdx.Load() && i == 0 {
-				c.activeIdx.Store(uint32(curr))
+			if int64(curr) != c.activeIdx.Load() && i == 0 {
+				c.activeIdx.Store(int64(curr))
 			}
 
 			return resp, nil
@@ -86,7 +86,7 @@ func (c *ProviderChain) Complete(ctx context.Context, req Request) (Response, er
 
 		fails := c.failCounts[curr].Add(1)
 		c.cooldowns[curr].Store(now + int64(1<<min(fails, 6)))
-		c.activeIdx.Store(uint32((curr + 1) % total))
+		c.activeIdx.Store(int64((curr + 1) % total))
 		c.switchCount.Add(1)
 	}
 
@@ -99,12 +99,12 @@ func (c *ProviderChain) Stream(ctx context.Context, req Request) (iter.Seq2[stri
 		return nil, xerr.Unavailable("no providers configured in chain")
 	}
 
-	idx := c.activeIdx.Load() % uint32(total)
+	idx := int(c.activeIdx.Load() % int64(total))
 
 	seq, err := c.providers[idx].Stream(ctx, req)
 	if err != nil && c.isTransient(err) && total > 1 {
-		next := (idx + 1) % uint32(total)
-		c.activeIdx.Store(next)
+		next := (idx + 1) % total
+		c.activeIdx.Store(int64(next))
 
 		return c.providers[next].Stream(ctx, req)
 	}

@@ -63,8 +63,8 @@ func newTeamActionWith(global GlobalOptions, build providerBuilder) action.AnyAc
 			if err != nil {
 				return nil, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), err)
 			}
-			if err := requireProvider(provider); err != nil {
-				return nil, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), err)
+			if providerErr := requireProvider(provider); providerErr != nil {
+				return nil, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), providerErr)
 			}
 
 			messages := make([]llm.Message, 0, len(conversation)+1)

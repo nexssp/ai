@@ -94,7 +94,7 @@ func StreamSSE(ctx context.Context, body io.ReadCloser, decode SSEChunkDecoder) 
 
 // DecodeOpenAIChunk handles the OpenAI / DeepSeek / Groq / most
 // OpenAI-compatible SSE delta shape.
-func DecodeOpenAIChunk(data []byte) (string, bool, error) {
+func DecodeOpenAIChunk(data []byte) (text string, done bool, err error) {
 	var chunk struct {
 		Choices []struct {
 			Delta struct {
@@ -114,7 +114,7 @@ func DecodeOpenAIChunk(data []byte) (string, bool, error) {
 }
 
 // DecodeAnthropicChunk handles content_block_delta and message_stop.
-func DecodeAnthropicChunk(data []byte) (string, bool, error) {
+func DecodeAnthropicChunk(data []byte) (text string, done bool, err error) {
 	var event struct {
 		Type  string `json:"type"`
 		Delta struct {
@@ -139,7 +139,7 @@ func DecodeAnthropicChunk(data []byte) (string, bool, error) {
 
 // DecodeGeminiChunk handles the candidates/parts/text shape. Multiple parts
 // in a single frame are concatenated; the caller sees one fragment per frame.
-func DecodeGeminiChunk(data []byte) (string, bool, error) {
+func DecodeGeminiChunk(data []byte) (text string, done bool, err error) {
 	var chunk struct {
 		Candidates []struct {
 			Content struct {

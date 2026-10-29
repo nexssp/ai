@@ -23,11 +23,20 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 	if flowCLI == "" || flowCWD == "" {
 		t.Skip("set NFLOW_BIN and NFLOW_CWD to run this Flow CLI integration test")
 	}
-	if _, err := os.Stat(flowCLI); err != nil {
-		t.Fatalf("Flow CLI %q: %v", flowCLI, err)
+	if name := filepath.Base(flowCLI); name != "flow" && name != "flow.exe" {
+		t.Skipf("NFLOW_BIN must point to a Flow executable named flow: %q", name)
 	}
-	if info, err := os.Stat(flowCWD); err != nil || !info.IsDir() {
-		t.Fatalf("NFLOW_CWD %q must be an existing directory (stat error: %v)", flowCWD, err)
+	flowDir, err := filepath.Abs(filepath.Dir(flowCLI))
+	if err != nil {
+		t.Fatalf("NFLOW_BIN directory: %v", err)
+	}
+	path := flowDir
+	if currentPath := os.Getenv("PATH"); currentPath != "" {
+		path += string(os.PathListSeparator) + currentPath
+	}
+	t.Setenv("PATH", path)
+	if _, err := exec.LookPath("flow"); err != nil {
+		t.Fatalf("Flow CLI %q: %v", flowCLI, err)
 	}
 
 	const (
@@ -180,7 +189,7 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, flowCLI, "run", flowPath, "--json")
+	cmd := exec.CommandContext(ctx, "flow", "run", flowPath, "--json")
 	cmd.Dir = flowCWD
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -42,7 +42,7 @@ func NewOllama(cfg Config) *OllamaProvider {
 	}
 
 	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "qwen2.5-coder:7b"
+		cfg.DefaultModel = defaultOllamaModel
 	}
 
 	timeout := cfg.Timeout
@@ -69,10 +69,10 @@ func NewOllama(cfg Config) *OllamaProvider {
 		}
 
 		payload := map[string]any{
-			"model":      req.Model,
-			"messages":   req.Messages,
-			"stream":     false,
-			"keep_alive": "24h",
+			jsonKeyModel:     req.Model,
+			jsonKeyMessages:  req.Messages,
+			"stream":         false,
+			jsonKeyKeepAlive: keepAlive24h,
 		}
 		if req.JSONMode {
 			payload["format"] = "json"
@@ -116,7 +116,7 @@ func (p *OllamaProvider) Name() string {
 		return p.cfg.Name
 	}
 
-	return "ollama"
+	return providerOllama
 }
 
 func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, error) {
@@ -132,10 +132,10 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	}
 
 	payload := map[string]any{
-		"model":      req.Model,
-		"messages":   req.Messages,
-		"stream":     true,
-		"keep_alive": "24h",
+		jsonKeyModel:     req.Model,
+		jsonKeyMessages:  req.Messages,
+		"stream":         true,
+		jsonKeyKeepAlive: keepAlive24h,
 	}
 
 	bodyBytes, err := p.codec.Marshal(payload)
@@ -162,9 +162,11 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(resp.Body)
+		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-
+		if readErr != nil {
+			return nil, xerr.Unavailable("ollama: read stream error response", readErr)
+		}
 		return nil, xerr.Unavailable(fmt.Sprintf("ollama: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
 	}
 
@@ -254,9 +256,12 @@ func (p *OllamaProvider) Preload(ctx context.Context, model string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return xerr.Unavailable("ollama preload response read failed", readErr)
+		}
 
-		return fmt.Errorf("ollama preload failed (status %d): %s", resp.StatusCode, string(body))
+		return xerr.Unavailable(fmt.Sprintf("ollama preload failed (status %d: %s)", resp.StatusCode, string(body)))
 	}
 
 	return nil

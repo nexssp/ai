@@ -69,3 +69,13 @@ func isTransientBody(body []byte) bool {
 
 	return false
 }
+
+func withErrorContext(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	appError := *xerr.From(err)
+	appError.Message = message + ": " + appError.Message
+	appError.Cause = err
+	return &appError
+}

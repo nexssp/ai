@@ -17,8 +17,8 @@ type ProviderPreset struct {
 }
 
 var Presets = map[string]ProviderPreset{
-	"openai": {
-		Name:         "openai",
+	providerOpenAI: {
+		Name:         providerOpenAI,
 		DefaultURL:   "https://api.openai.com/v1",
 		DefaultModel: "gpt-4o-mini",
 		EnvKeyNames:  []string{"OPENAI_API_KEY"},
@@ -29,8 +29,8 @@ var Presets = map[string]ProviderPreset{
 		DefaultModel: "llama-3.1-8b-instant",
 		EnvKeyNames:  []string{"GROQ_API_KEY"},
 	},
-	"nvidia": {
-		Name:         "nvidia",
+	providerNVIDIA: {
+		Name:         providerNVIDIA,
 		DefaultURL:   "https://integrate.api.nvidia.com/v1",
 		DefaultModel: "meta/llama-3.3-70b-instruct",
 		EnvKeyNames:  []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "NVCF_API_KEY"},
@@ -41,23 +41,23 @@ var Presets = map[string]ProviderPreset{
 		DefaultModel: "meta/llama-3.3-70b-instruct",
 		EnvKeyNames:  []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"},
 	},
-	"deepseek": {
-		Name:         "deepseek",
+	providerDeepSeek: {
+		Name:         providerDeepSeek,
 		DefaultURL:   "https://api.deepseek.com/v1",
 		DefaultModel: "deepseek-flash",
 		EnvKeyNames:  []string{"DEEPSEEK_API_KEY"},
 		IsDeepSeek:   true,
 	},
-	"openrouter": {
-		Name:         "openrouter",
+	providerOpenRouter: {
+		Name:         providerOpenRouter,
 		DefaultURL:   "https://openrouter.ai/api/v1",
 		DefaultModel: "meta-llama/llama-3.3-70b-instruct:free",
 		EnvKeyNames:  []string{"OPENROUTER_API_KEY", "OPENROUTER_KEY"},
 	},
-	"lmstudio": {
-		Name:         "lmstudio",
+	providerLMStudio: {
+		Name:         providerLMStudio,
 		DefaultURL:   "http://127.0.0.1:1234/v1",
-		DefaultModel: "qwen2.5-coder:7b",
+		DefaultModel: defaultOllamaModel,
 		EnvKeyNames:  []string{"LMSTUDIO_API_KEY"},
 	},
 	"vllm": {
@@ -103,19 +103,19 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 	}
 
 	switch pType {
-	case "anthropic", "claude":
+	case providerAnthropic, "claude":
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
 
 		return NewAnthropic(cfg), nil
-	case "gemini", "google":
+	case providerGemini, "google":
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("GEMINI_API_KEY")
 		}
 
 		return NewGemini(cfg), nil
-	case "ollama", "ollama_cloud":
+	case providerOllama, "ollama_cloud":
 		return NewOllama(cfg), nil
 	default:
 		return nil, xerr.BadRequest(fmt.Sprintf("unknown LLM provider: %q", providerType))

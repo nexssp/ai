@@ -26,7 +26,7 @@ func (r *TieredModelRouter) CompleteAdaptive(ctx context.Context, req Request, m
 	// Tier 1: Fast / Edge / Local
 	if minTier <= 1 && r.FastSmall != nil {
 		res, err := r.FastSmall.Complete(ctx, req)
-		if err == nil && len(res.Content) > 0 {
+		if err == nil && res.Content != "" {
 			return res, 1, nil
 		}
 	}
@@ -34,7 +34,7 @@ func (r *TieredModelRouter) CompleteAdaptive(ctx context.Context, req Request, m
 	// Tier 2: Standard Workhorse
 	if minTier <= 2 && r.Standard != nil {
 		res, err := r.Standard.Complete(ctx, req)
-		if err == nil && len(res.Content) > 0 {
+		if err == nil && res.Content != "" {
 			return res, 2, nil
 		}
 	}

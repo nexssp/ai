@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"iter"
 
@@ -74,12 +73,12 @@ func (p *FallbackProvider) Name() string {
 
 func (p *FallbackProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	if p == nil || p.primary == nil || p.secondary == nil {
-		return Response{}, errors.New("llm: fallback requires primary and secondary providers")
+		return Response{}, xerr.Validation("llm: fallback requires primary and secondary providers")
 	}
 
 	res, primaryErr := p.primary.Complete(ctx, req)
 	if primaryErr == nil || !p.cfg.ShouldFallback(primaryErr) || ctx.Err() != nil {
-		return res, primaryErr
+		return res, withErrorContext("llm: primary provider failed", primaryErr)
 	}
 
 	fallbackReq := p.cfg.Transform(req)
@@ -89,13 +88,13 @@ func (p *FallbackProvider) Complete(ctx context.Context, req Request) (Response,
 			FallbackRequest: fallbackReq,
 			PrimaryError:    primaryErr,
 		}); err != nil {
-			return Response{}, err
+			return Response{}, withErrorContext("llm: fallback callback failed", err)
 		}
 	}
 
 	fallbackRes, fallbackErr := p.secondary.Complete(ctx, fallbackReq)
 	if fallbackErr != nil {
-		return fallbackRes, &FallbackError{Primary: primaryErr, Secondary: fallbackErr}
+		return fallbackRes, xerr.Unavailable("llm: provider fallback failed", &FallbackError{Primary: primaryErr, Secondary: fallbackErr})
 	}
 
 	return fallbackRes, nil
@@ -103,7 +102,7 @@ func (p *FallbackProvider) Complete(ctx context.Context, req Request) (Response,
 
 func (p *FallbackProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
 	if p == nil || p.primary == nil || p.secondary == nil {
-		return nil, errors.New("llm: fallback requires primary and secondary providers")
+		return nil, xerr.Validation("llm: fallback requires primary and secondary providers")
 	}
 
 	stream, primaryErr := p.primary.Stream(ctx, req)
@@ -112,7 +111,7 @@ func (p *FallbackProvider) Stream(ctx context.Context, req Request) (iter.Seq2[s
 	}
 
 	if !p.cfg.ShouldFallback(primaryErr) || ctx.Err() != nil {
-		return nil, primaryErr
+		return nil, withErrorContext("llm: primary provider failed", primaryErr)
 	}
 
 	fallbackReq := p.cfg.Transform(req)
@@ -122,9 +121,13 @@ func (p *FallbackProvider) Stream(ctx context.Context, req Request) (iter.Seq2[s
 			FallbackRequest: fallbackReq,
 			PrimaryError:    primaryErr,
 		}); err != nil {
-			return nil, err
+			return nil, withErrorContext("llm: fallback callback failed", err)
 		}
 	}
 
-	return p.secondary.Stream(ctx, fallbackReq)
+	stream, fallbackErr := p.secondary.Stream(ctx, fallbackReq)
+	if fallbackErr != nil {
+		return nil, xerr.Unavailable("llm: provider fallback failed", &FallbackError{Primary: primaryErr, Secondary: fallbackErr})
+	}
+	return stream, nil
 }

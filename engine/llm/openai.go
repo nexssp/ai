@@ -76,9 +76,9 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 		}
 
 		payload := map[string]any{
-			"model":       req.Model,
-			"messages":    req.Messages,
-			"temperature": req.Temperature,
+			jsonKeyModel:    req.Model,
+			jsonKeyMessages: req.Messages,
+			"temperature":   req.Temperature,
 		}
 		if req.MaxTokens > 0 {
 			payload["max_tokens"] = req.MaxTokens
@@ -140,7 +140,7 @@ func (p *OpenAIProvider) Name() string {
 		return p.cfg.Name
 	}
 
-	return "openai"
+	return providerOpenAI
 }
 
 func (p *OpenAIProvider) Complete(ctx context.Context, req Request) (Response, error) {
@@ -153,10 +153,10 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	}
 
 	payload := map[string]any{
-		"model":       req.Model,
-		"messages":    req.Messages,
-		"temperature": req.Temperature,
-		"stream":      true,
+		jsonKeyModel:    req.Model,
+		jsonKeyMessages: req.Messages,
+		"temperature":   req.Temperature,
+		"stream":        true,
 	}
 
 	bodyBytes, err := p.codec.Marshal(payload)
@@ -183,9 +183,12 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBytes, _ := io.ReadAll(resp.Body)
+		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 
+		if readErr != nil {
+			return nil, xerr.Unavailable("llm: read stream error response", readErr)
+		}
 		return nil, FromHTTPStatus(resp.StatusCode, respBytes, p.Name())
 	}
 

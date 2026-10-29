@@ -36,7 +36,7 @@ func FromResponse(r Response) Usage {
 }
 
 // Tokens returns (input, output) token counts.
-func (u Usage) Tokens() (int, int) { return u.PromptTokens, u.CompTokens }
+func (u Usage) Tokens() (prompt, completion int) { return u.PromptTokens, u.CompTokens }
 
 // CostMicros returns the cost in micro-units of the rate-card currency.
 // Zero when the model has no rate card — that is intentional; the

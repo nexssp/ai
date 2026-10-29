@@ -3,9 +3,10 @@ package llm
 
 import (
 	"context"
-	"fmt"
 	"iter"
 	"time"
+
+	"github.com/nexssp/kernel/xerr"
 )
 
 // ProviderTrace is the callback invoked by ObservableProvider around
@@ -79,7 +80,7 @@ func (p *ObservableProvider) Complete(ctx context.Context, req Request) (Respons
 		p.emit("warn", p.inner.Name(), res.Model,
 			res.PromptTokens, res.CompTokens,
 			int64(res.CostMicros()), dur,
-			fmt.Errorf("response truncated (finish_reason=length); raise @config:max_tokens"))
+			xerr.Validation("response truncated (finish_reason=length); raise @config:max_tokens"))
 	}
 
 	return res, nil

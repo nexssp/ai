@@ -8,8 +8,10 @@ package llm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -100,7 +102,7 @@ func LoadExpertsManifest(data []byte) (*ExpertsManifest, error) {
 	dec.KnownFields(false)
 
 	if err := dec.Decode(&manifest); err != nil {
-		return nil, xerr.BadRequest(fmt.Sprintf("llm: failed to parse experts manifest: %v", err))
+		return nil, xerr.BadRequest("llm: failed to parse experts manifest", err)
 	}
 
 	return &manifest, nil
@@ -109,7 +111,11 @@ func LoadExpertsManifest(data []byte) (*ExpertsManifest, error) {
 func LoadExpertsFile(filePath string) (*ExpertsManifest, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, xerr.NotFound(fmt.Sprintf("llm: could not read experts file %q", filePath), err)
+		message := fmt.Sprintf("llm: could not read experts file %q", filePath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, xerr.NotFound(message, err)
+		}
+		return nil, xerr.Unavailable(message, err)
 	}
 
 	return LoadExpertsManifest(data)
@@ -172,7 +178,7 @@ func BuildMoEExperts(manifest *ExpertsManifest) (map[string]Provider, error) {
 				Timeout:      timeout,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("llm: expert %q provider %q: %w", key, pc.Provider, err)
+				return nil, withErrorContext(fmt.Sprintf("llm: expert %q provider %q", key, pc.Provider), err)
 			}
 
 			if prov != nil {
@@ -251,8 +257,8 @@ func (m *ExpertsManifest) MatchExpertByKeywords(query string) string {
 // that points to a missing file is a hard error.
 func ResolveConfigPath(flag, envKey string, defaults ...string) (string, error) {
 	if flag != "" {
-		if _, err := os.Stat(flag); err != nil {
-			return "", fmt.Errorf("config file from flag not found: %s", flag)
+		if err := statConfigPath(flag); err != nil {
+			return "", xerr.NotFound("config file from flag not found: "+flag, err)
 		}
 
 		return flag, nil
@@ -260,8 +266,8 @@ func ResolveConfigPath(flag, envKey string, defaults ...string) (string, error) 
 
 	if envKey != "" {
 		if v := os.Getenv(envKey); v != "" {
-			if _, err := os.Stat(v); err != nil {
-				return "", fmt.Errorf("%s=%s not found", envKey, v)
+			if err := statConfigPath(v); err != nil {
+				return "", xerr.NotFound(fmt.Sprintf("%s=%s not found", envKey, v), err)
 			}
 
 			return v, nil
@@ -269,10 +275,37 @@ func ResolveConfigPath(flag, envKey string, defaults ...string) (string, error) 
 	}
 
 	for _, def := range defaults {
-		if _, err := os.Stat(def); err == nil {
+		if err := statConfigPath(def); err == nil {
 			return def, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", xerr.Unavailable("llm: check default config path", err)
 		}
 	}
 
-	return "", fmt.Errorf("no config file found (checked: %v)", defaults)
+	return "", xerr.NotFound(fmt.Sprintf("no config file found (checked: %v)", defaults))
+}
+
+func statConfigPath(filePath string) (err error) {
+	absolutePath, err := filepath.Abs(filePath)
+	if err != nil {
+		return xerr.Validation("llm: config path is invalid", err)
+	}
+	rootPath := filepath.VolumeName(absolutePath) + string(filepath.Separator)
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return xerr.Unavailable("llm: open config filesystem root", err)
+	}
+	defer func() {
+		err = errors.Join(err, root.Close())
+	}()
+
+	relativePath, err := filepath.Rel(rootPath, absolutePath)
+	if err != nil {
+		return xerr.Validation("llm: config path is invalid", err)
+	}
+	if !filepath.IsLocal(relativePath) {
+		return xerr.Validation("llm: config path escapes its filesystem root")
+	}
+	_, err = root.Stat(relativePath)
+	return err
 }
