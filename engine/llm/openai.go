@@ -21,35 +21,52 @@ type OpenAIProvider struct {
 	execAction *action.BuiltAction[Request, Response]
 }
 
+type openAIRequestPayload struct {
+	Model           string                `json:"model"`
+	Messages        []Message             `json:"messages"`
+	Temperature     float64               `json:"temperature"`
+	MaxTokens       int                   `json:"max_tokens,omitempty"`
+	ReasoningEffort ReasoningEffort       `json:"reasoning_effort,omitempty"`
+	ResponseFormat  *openAIResponseFormat `json:"response_format,omitempty"`
+	Tools           []ToolSpec            `json:"tools,omitempty"`
+	Stream          bool                  `json:"stream,omitempty"`
+}
+
+type openAIResponseFormat struct {
+	Type string `json:"type"`
+}
+
 // openAIWireResponse captures reasoning_content (DeepSeek, vLLM, LMStudio,
 // and any other OpenAI-compatible reasoning provider) plus DeepSeek's
 // prompt cache hit/miss counters.
 type openAIWireResponse struct {
-	Model   string `json:"model"`
-	Choices []struct {
-		Message struct {
-			Role             Role       `json:"role"`
-			Content          string     `json:"content"`
-			ReasoningContent string     `json:"reasoning_content"`
-			ToolCalls        []ToolCall `json:"tool_calls"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens    int `json:"prompt_tokens"`
-		CompTokens      int `json:"completion_tokens"`
-		PromptCacheHit  int `json:"prompt_cache_hit_tokens"`
-		PromptCacheMiss int `json:"prompt_cache_miss_tokens"`
-	} `json:"usage"`
+	Model   string             `json:"model"`
+	Choices []openAIWireChoice `json:"choices"`
+	Usage   openAIWireUsage    `json:"usage"`
+}
+
+type openAIWireChoice struct {
+	Message      openAIWireMessage `json:"message"`
+	FinishReason string            `json:"finish_reason"`
+}
+
+type openAIWireMessage struct {
+	Role             Role       `json:"role"`
+	Content          string     `json:"content"`
+	ReasoningContent string     `json:"reasoning_content"`
+	ToolCalls        []ToolCall `json:"tool_calls"`
+}
+
+type openAIWireUsage struct {
+	PromptTokens    int `json:"prompt_tokens"`
+	CompTokens      int `json:"completion_tokens"`
+	PromptCacheHit  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMiss int `json:"prompt_cache_miss_tokens"`
 }
 
 func NewOpenAI(cfg Config) *OpenAIProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://api.openai.com/v1"
-	}
-
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "gpt-4o-mini"
 	}
 
 	timeout := cfg.Timeout
@@ -74,22 +91,19 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 		if req.Model == "" {
 			req.Model = p.cfg.DefaultModel
 		}
-
-		payload := map[string]any{
-			jsonKeyModel:    req.Model,
-			jsonKeyMessages: req.Messages,
-			"temperature":   req.Temperature,
-		}
-		if req.MaxTokens > 0 {
-			payload["max_tokens"] = req.MaxTokens
+		if req.Model == "" {
+			return Response{}, xerr.Validation("llm: model is required in the request or provider configuration")
 		}
 
+		payload := openAIRequestPayload{
+			Model: req.Model, Messages: req.Messages, Temperature: req.Temperature,
+			MaxTokens: req.MaxTokens, ReasoningEffort: req.ReasoningEffort,
+		}
 		if req.JSONMode {
-			payload["response_format"] = map[string]string{"type": "json_object"}
+			payload.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
 		}
-
 		if len(req.Tools) > 0 {
-			payload["tools"] = req.Tools
+			payload.Tools = req.Tools
 		}
 
 		headers := map[string]string{}
@@ -114,11 +128,15 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 		}
 
 		choice := raw.Choices[0]
+		model := raw.Model
+		if model == "" {
+			model = req.Model
+		}
 
 		return Response{
 			Content:            choice.Message.Content,
 			ReasoningContent:   choice.Message.ReasoningContent,
-			Model:              raw.Model,
+			Model:              model,
 			PromptTokens:       raw.Usage.PromptTokens,
 			CachedPromptTokens: raw.Usage.PromptCacheHit,
 			CompTokens:         raw.Usage.CompTokens,
@@ -144,6 +162,9 @@ func (p *OpenAIProvider) Name() string {
 }
 
 func (p *OpenAIProvider) Complete(ctx context.Context, req Request) (Response, error) {
+	if req.Model == "" && p.cfg.DefaultModel == "" {
+		return Response{}, xerr.Validation("llm: model is required in the request or provider configuration")
+	}
 	return p.execAction.Do(ctx, req)
 }
 
@@ -151,12 +172,13 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
 	}
+	if req.Model == "" {
+		return nil, xerr.Validation("llm: model is required in the request or provider configuration")
+	}
 
-	payload := map[string]any{
-		jsonKeyModel:    req.Model,
-		jsonKeyMessages: req.Messages,
-		"temperature":   req.Temperature,
-		"stream":        true,
+	payload := openAIRequestPayload{
+		Model: req.Model, Messages: req.Messages, Temperature: req.Temperature,
+		ReasoningEffort: req.ReasoningEffort, Stream: true,
 	}
 
 	bodyBytes, err := p.codec.Marshal(payload)
@@ -179,7 +201,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, xerr.Unavailable("llm: stream request failed", err)
+		return nil, mapProviderTransportError(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -187,9 +209,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 		_ = resp.Body.Close()
 
 		if readErr != nil {
-			return nil, xerr.Unavailable("llm: read stream error response", readErr)
+			return nil, mapProviderTransportError(readErr)
 		}
-		return nil, FromHTTPStatus(resp.StatusCode, respBytes, p.Name())
+		return nil, FromStreamHTTPStatus(resp.StatusCode, respBytes, p.Name())
 	}
 
 	return ParseOpenAISSEStream(ctx, resp.Body), nil

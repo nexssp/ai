@@ -15,56 +15,89 @@ import (
 // durable actor: its only turn is run in order, then its output is added to the
 // in-run conversation for later roles.
 type RoleAgent struct {
-	Name         string `json:"name"`
-	Role         string `json:"role"`
-	Instructions string `json:"instructions"`
-	Model        string `json:"model,omitempty"`
+	Name            string              `json:"name"`
+	Role            string              `json:"role"`
+	Instructions    string              `json:"instructions"`
+	CandidateID     string              `json:"candidate_id,omitempty"`
+	AttemptID       string              `json:"attempt_id,omitempty"`
+	Provider        string              `json:"provider,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	BaseURL         string              `json:"base_url,omitempty"`
+	ReasoningEffort llm.ReasoningEffort `json:"reasoning_effort,omitempty"`
 }
 
-// RoleTurn is the single completion produced by one declared role agent.
+// TeamRequest is the typed input to ai.team.
+type TeamRequest struct {
+	Goal            string              `json:"goal"`
+	Agents          []RoleAgent         `json:"agents"`
+	CandidateID     string              `json:"candidate_id,omitempty"`
+	AttemptID       string              `json:"attempt_id,omitempty"`
+	Provider        string              `json:"provider,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	BaseURL         string              `json:"base_url,omitempty"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	Temperature     float64             `json:"temperature,omitempty"`
+	ReasoningEffort llm.ReasoningEffort `json:"reasoning_effort,omitempty"`
+}
+
+// RoleTurn is one independent completion produced by a role agent.
 type RoleTurn struct {
-	Name         string `json:"name"`
-	Role         string `json:"role"`
-	Content      string `json:"content"`
-	Model        string `json:"model,omitempty"`
-	PromptTokens int    `json:"prompt_tokens"`
-	CompTokens   int    `json:"completion_tokens"`
+	Name         string    `json:"name"`
+	Role         string    `json:"role"`
+	CandidateID  string    `json:"candidate_id,omitempty"`
+	AttemptID    string    `json:"attempt_id,omitempty"`
+	Provider     string    `json:"provider"`
+	Content      string    `json:"content"`
+	Model        string    `json:"model"`
+	PromptTokens int       `json:"prompt_tokens"`
+	CompTokens   int       `json:"completion_tokens"`
+	Usage        llm.Usage `json:"usage"`
+}
+
+// TeamResult contains each independently accounted role turn and the final
+// in-run transcript. Cost is not summed across currencies/models; inspect each
+// turn's Usage for its configured rate-card currency.
+type TeamResult struct {
+	Goal         string        `json:"goal"`
+	Agents       []RoleTurn    `json:"agents"`
+	Conversation []llm.Message `json:"conversation"`
+	Content      string        `json:"content"`
+	Provider     string        `json:"provider"`
+	Model        string        `json:"model"`
+	PromptTokens int           `json:"prompt_tokens"`
+	CompTokens   int           `json:"comp_tokens"`
+	TotalTokens  int           `json:"total_tokens"`
 }
 
 func newTeamActionWith(global GlobalOptions, build providerBuilder) action.AnyAction {
-	return action.New("ai.team", func(ctx context.Context, req map[string]any) (map[string]any, error) {
+	return action.New[TeamRequest, TeamResult]("ai.team", func(ctx context.Context, req TeamRequest) (TeamResult, error) {
+		if strings.TrimSpace(req.Goal) == "" {
+			return TeamResult{}, xerr.Validation("ai.team: goal is required")
+		}
 		if build == nil {
-			return nil, xerr.Internal("ai.team: provider builder is unavailable")
+			return TeamResult{}, xerr.Internal("ai.team: provider builder is unavailable")
 		}
-		goal := stringOf(req["goal"])
-		if strings.TrimSpace(goal) == "" {
-			return nil, xerr.Validation("ai.team: goal is required")
-		}
-		agents, err := parseRoleAgents(req["agents"])
+		agents, err := normalizeRoleAgents(req.Agents)
 		if err != nil {
-			return nil, err
+			return TeamResult{}, err
 		}
 
-		// This slice is private to this action invocation. Each role sees the
-		// goal and every earlier role's named assistant message; no session or
-		// agent state survives the Flow run.
-		conversation := []llm.Message{{Role: llm.RoleUser, Content: goal}}
+		conversation := []llm.Message{{Role: llm.RoleUser, Content: req.Goal}}
 		turns := make([]RoleTurn, 0, len(agents))
 		var promptTokens, compTokens int
-		defaultModel := stringOf(req["model"])
-		for _, agent := range agents {
-			model := firstNonEmpty(agent.Model, defaultModel)
-			baseURL := stringOf(req["base_url"])
+		for i := range agents {
+			agent := &agents[i]
+			model := firstNonEmpty(agent.Model, req.Model)
 			provider, err := build(global, LLMDecl{
-				Provider: stringOf(req["provider"]),
+				Provider: firstNonEmpty(agent.Provider, req.Provider),
 				Model:    model,
-				BaseURL:  baseURL,
+				BaseURL:  firstNonEmpty(agent.BaseURL, req.BaseURL),
 			})
 			if err != nil {
-				return nil, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), err)
+				return TeamResult{}, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), err)
 			}
 			if providerErr := requireProvider(provider); providerErr != nil {
-				return nil, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), providerErr)
+				return TeamResult{}, errorContext(fmt.Sprintf("ai.team: configure agent %q", agent.Name), providerErr)
 			}
 
 			messages := make([]llm.Message, 0, len(conversation)+1)
@@ -76,23 +109,33 @@ func newTeamActionWith(global GlobalOptions, build providerBuilder) action.AnyAc
 				),
 			})
 			messages = append(messages, conversation...)
+			reasoningEffort := agent.ReasoningEffort
+			if reasoningEffort == "" {
+				reasoningEffort = req.ReasoningEffort
+			}
 			response, err := provider.Complete(ctx, llm.Request{
-				Model:       model,
-				Messages:    messages,
-				MaxTokens:   intOf(req["max_tokens"]),
-				Temperature: floatOf(req["temperature"]),
+				Model:           model,
+				Messages:        messages,
+				MaxTokens:       req.MaxTokens,
+				Temperature:     req.Temperature,
+				ReasoningEffort: reasoningEffort,
 			})
 			if err != nil {
-				return nil, errorContext(fmt.Sprintf("ai.team: agent %q (%s) turn failed", agent.Name, agent.Role), completionError(err))
+				return TeamResult{}, errorContext(fmt.Sprintf("ai.team: agent %q (%s) turn failed", agent.Name, agent.Role), completionError(err))
 			}
 
+			usage := llm.FromResponse(response)
 			turns = append(turns, RoleTurn{
 				Name:         agent.Name,
 				Role:         agent.Role,
+				CandidateID:  firstNonEmpty(agent.CandidateID, req.CandidateID),
+				AttemptID:    firstNonEmpty(agent.AttemptID, req.AttemptID),
+				Provider:     provider.Name(),
 				Content:      response.Content,
 				Model:        response.Model,
 				PromptTokens: response.PromptTokens,
 				CompTokens:   response.CompTokens,
+				Usage:        usage,
 			})
 			promptTokens += response.PromptTokens
 			compTokens += response.CompTokens
@@ -103,57 +146,30 @@ func newTeamActionWith(global GlobalOptions, build providerBuilder) action.AnyAc
 			})
 		}
 
-		out := shallowCopy(req)
-		out["agents"] = turns
-		out["conversation"] = conversation
-		out["content"] = turns[len(turns)-1].Content
-		out["model"] = turns[len(turns)-1].Model
-		out["prompt_tokens"] = promptTokens
-		out["comp_tokens"] = compTokens
-		out["total_tokens"] = promptTokens + compTokens
-		return out, nil
+		last := turns[len(turns)-1]
+		return TeamResult{
+			Goal:         req.Goal,
+			Agents:       turns,
+			Conversation: conversation,
+			Content:      last.Content,
+			Provider:     last.Provider,
+			Model:        last.Model,
+			PromptTokens: promptTokens,
+			CompTokens:   compTokens,
+			TotalTokens:  promptTokens + compTokens,
+		}, nil
 	}).Description("Run ordered, one-turn role agents that share outputs within this Flow invocation").Tag("ai", "team").Build()
 }
 
-func parseRoleAgents(raw any) ([]RoleAgent, error) {
-	var values []any
-	switch agents := raw.(type) {
-	case []any:
-		values = agents
-	case []map[string]any:
-		values = make([]any, len(agents))
-		for i := range agents {
-			values[i] = agents[i]
-		}
-	case []RoleAgent:
-		values = make([]any, len(agents))
-		for i := range agents {
-			values[i] = agents[i]
-		}
-	default:
-		return nil, xerr.Validation("ai.team: agents must be a list of role definitions")
-	}
-	if len(values) < 2 {
+func normalizeRoleAgents(agents []RoleAgent) ([]RoleAgent, error) {
+	if len(agents) < 2 {
 		return nil, xerr.Validation("ai.team: at least two role agents are required")
 	}
-
-	agents := make([]RoleAgent, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for i, value := range values {
-		var agent RoleAgent
-		switch v := value.(type) {
-		case RoleAgent:
-			agent = v
-		case map[string]any:
-			agent = RoleAgent{
-				Name:         stringOf(v["name"]),
-				Role:         stringOf(v["role"]),
-				Instructions: stringOf(v["instructions"]),
-				Model:        stringOf(v["model"]),
-			}
-		default:
-			return nil, xerr.Validation(fmt.Sprintf("ai.team: agent %d must be a role definition", i+1))
-		}
+	normalized := make([]RoleAgent, len(agents))
+	copy(normalized, agents)
+	seen := make(map[string]struct{}, len(agents))
+	for i := range normalized {
+		agent := &normalized[i]
 		agent.Name = strings.TrimSpace(agent.Name)
 		agent.Role = strings.TrimSpace(agent.Role)
 		agent.Instructions = strings.TrimSpace(agent.Instructions)
@@ -164,7 +180,6 @@ func parseRoleAgents(raw any) ([]RoleAgent, error) {
 			return nil, xerr.Validation(fmt.Sprintf("ai.team: duplicate agent name %q", agent.Name))
 		}
 		seen[agent.Name] = struct{}{}
-		agents = append(agents, agent)
 	}
-	return agents, nil
+	return normalized, nil
 }

@@ -15,11 +15,7 @@ type DeepSeekProvider struct {
 
 func NewDeepSeek(cfg Config) *DeepSeekProvider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://api.deepseek.com/v1"
-	}
-
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "deepseek-chat"
+		cfg.BaseURL = "https://api.deepseek.com"
 	}
 
 	if cfg.Name == "" {

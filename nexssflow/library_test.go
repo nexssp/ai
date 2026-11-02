@@ -2,6 +2,7 @@ package nexssflow
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"slices"
 	"strings"
@@ -25,14 +26,18 @@ func (p *fakeProvider) Name() string { return "fake" }
 func (p *fakeProvider) Complete(_ context.Context, req llm.Request) (llm.Response, error) {
 	p.request = req
 	p.calls++
-	return llm.Response{Content: "fake answer", Model: "fake-model", PromptTokens: 3, CompTokens: 2}, nil
+	model := req.Model
+	if model == "" {
+		model = "fake-model"
+	}
+	return llm.Response{Content: "fake answer", Model: model, PromptTokens: 3, CompTokens: 2}, nil
 }
 
 func (p *fakeProvider) Stream(context.Context, llm.Request) (iter.Seq2[string, error], error) {
 	return func(_ func(string, error) bool) {}, nil
 }
 
-func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
+func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	factory, ok := compiler.Lookup(ID)
 	if !ok {
 		t.Fatal("ai bundle factory was not registered")
@@ -48,7 +53,7 @@ func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
 		t.Fatalf("unexpected Flow bundle: %+v", bundle)
 	}
 	if len(bundle.Libraries[0].Aliases) != 0 {
-		t.Fatal("Flow v0.42 bundles must expose canonical actions without Kernel aliases")
+		t.Fatal("Flow bundle must expose canonical actions without aliases")
 	}
 	if factory == nil {
 		t.Fatal("registered bundle factory is nil")
@@ -59,27 +64,32 @@ func TestBundleRegistersAndRunsPromptActionThroughFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	if _, promptActionOK := cfg.Resolver.Action("ai.prompt"); !promptActionOK {
-		t.Fatal("ai.prompt was not mounted in the Flow resolver")
-	}
-	if _, teamActionOK := cfg.Resolver.Action("ai.team"); !teamActionOK {
-		t.Fatal("ai.team was not mounted in the Flow resolver")
+	for _, name := range []string{"ai.prompt", "ai.team", "ai.decide", "ai.cost.estimate"} {
+		if _, found := cfg.Resolver.Action(name); !found {
+			t.Fatalf("%s was not mounted in the Flow resolver", name)
+		}
 	}
 
+	contextJSON := json.RawMessage(`{"job":"keep-explicitly"}`)
 	execution, err := runner.Execute(context.Background(), cfg, "ai.prompt", "prompt-test.nflow", map[string]any{
-		"job_id": "keep-me",
-		"system": "Be concise",
-		"user":   "What is 2+2?",
+		"candidate_id": "candidate-a",
+		"attempt_id":   "attempt-1",
+		"context":      contextJSON,
+		"system":       "Be concise",
+		"user":         "What is 2+2?",
 	})
 	if err != nil {
 		t.Fatalf("runner.Execute: %v", err)
 	}
-	out, ok := execution.Output.(map[string]any)
+	out, ok := execution.Output.(PromptResult)
 	if !ok {
-		t.Fatalf("output type = %T, want map[string]any", execution.Output)
+		t.Fatalf("output type = %T, want PromptResult", execution.Output)
 	}
-	if out["content"] != "fake answer" || out["job_id"] != "keep-me" || out["prompt_tokens"] != 3 || out["total_tokens"] != 5 {
-		t.Fatalf("unexpected merged output: %#v", out)
+	if out.Content != "fake answer" || out.CandidateID != "candidate-a" || out.AttemptID != "attempt-1" || out.PromptTokens != 3 || out.TotalTokens != 5 {
+		t.Fatalf("unexpected typed output: %+v", out)
+	}
+	if string(out.Context) != string(contextJSON) {
+		t.Fatalf("explicit context = %s, want %s", out.Context, contextJSON)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.calls)
@@ -94,7 +104,7 @@ func TestPromptActionRequiresUserWithoutCompletion(t *testing.T) {
 	act := newPromptActionWith(GlobalOptions{}, func(_ GlobalOptions, _ LLMDecl) (llm.Provider, error) {
 		return provider, nil
 	})
-	_, err := act.DoAny(context.Background(), map[string]any{"system": "system only"})
+	_, err := act.DoAny(context.Background(), PromptRequest{System: "system only"})
 	if err == nil {
 		t.Fatal("expected a missing-user error")
 	}
@@ -105,7 +115,10 @@ func TestPromptActionRequiresUserWithoutCompletion(t *testing.T) {
 
 func TestBundleDeclaresAndValidatesRequireOptions(t *testing.T) {
 	bundle := Bundle(nil)
-	want := []string{"provider", "model", "api_key_env", "timeout", "base_url"}
+	want := []string{
+		"provider", "model", "api_key_env", "timeout", "base_url",
+		"decision_provider", "decision_model", "decision_api_key_env", "decision_base_url",
+	}
 	if !slices.Equal(bundle.AcceptedOptions, want) {
 		t.Fatalf("accepted @require options = %v, want %v", bundle.AcceptedOptions, want)
 	}

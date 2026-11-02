@@ -3,7 +3,6 @@ package llm
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"iter"
 	"net/http"
@@ -22,26 +21,49 @@ type AnthropicProvider struct {
 	execAction *action.BuiltAction[Request, Response]
 }
 
+type anthropicRequestMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type anthropicRequestPayload struct {
+	Model        string                    `json:"model"`
+	MaxTokens    int                       `json:"max_tokens"`
+	Messages     []anthropicRequestMessage `json:"messages"`
+	System       string                    `json:"system,omitempty"`
+	OutputConfig *anthropicOutputConfig    `json:"output_config,omitempty"`
+	Stream       bool                      `json:"stream,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Format anthropicOutputFormat `json:"format"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string     `json:"type"`
+	Schema JSONSchema `json:"schema"`
+}
+
 // anthropicWireResponse is the JSON shape of the /messages response.
 type anthropicWireResponse struct {
-	Model   string `json:"model"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Model   string                  `json:"model"`
+	Content []anthropicContentBlock `json:"content"`
+	Usage   anthropicWireUsage      `json:"usage"`
+}
+
+type anthropicContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type anthropicWireUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 func NewAnthropic(cfg Config) *AnthropicProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://api.anthropic.com/v1"
-	}
-
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "claude-3-5-sonnet-20241022"
 	}
 
 	timeout := cfg.Timeout
@@ -65,6 +87,9 @@ func NewAnthropic(cfg Config) *AnthropicProvider {
 
 		if req.Model == "" {
 			req.Model = p.cfg.DefaultModel
+		}
+		if req.Model == "" {
+			return Response{}, xerr.Validation("anthropic: model is required in the request or provider configuration")
 		}
 
 		payload := p.buildPayload(req, false)
@@ -94,9 +119,13 @@ func NewAnthropic(cfg Config) *AnthropicProvider {
 			}
 		}
 
+		model := raw.Model
+		if model == "" {
+			model = req.Model
+		}
 		return Response{
 			Content:      fullText.String(),
-			Model:        raw.Model,
+			Model:        model,
 			PromptTokens: raw.Usage.InputTokens,
 			CompTokens:   raw.Usage.OutputTokens,
 			Duration:     time.Since(start),
@@ -119,12 +148,18 @@ func (p *AnthropicProvider) Name() string {
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response, error) {
+	if req.Model == "" && p.cfg.DefaultModel == "" {
+		return Response{}, xerr.Validation("anthropic: model is required in the request or provider configuration")
+	}
 	return p.execAction.Do(ctx, req)
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
+	}
+	if req.Model == "" {
+		return nil, xerr.Validation("anthropic: model is required in the request or provider configuration")
 	}
 
 	payload := p.buildPayload(req, true)
@@ -147,16 +182,16 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (iter.Seq2[
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, xerr.Unavailable("anthropic: stream request failed", err)
+		return nil, mapProviderTransportError(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if readErr != nil {
-			return nil, xerr.Unavailable("anthropic: read stream error response", readErr)
+			return nil, mapProviderTransportError(readErr)
 		}
-		return nil, xerr.Unavailable(fmt.Sprintf("anthropic: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
+		return nil, FromStreamHTTPStatus(resp.StatusCode, respBytes, p.Name())
 	}
 
 	return StreamSSE(ctx, resp.Body, DecodeAnthropicChunk), nil
@@ -164,10 +199,10 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request) (iter.Seq2[
 
 // buildPayload converts an llm.Request into the Anthropic-native payload
 // shape. Deterministic; no I/O; safe to call from tests.
-func (p *AnthropicProvider) buildPayload(req Request, stream bool) map[string]any {
+func (p *AnthropicProvider) buildPayload(req Request, stream bool) anthropicRequestPayload {
 	var (
 		systemPrompts []string
-		messages      []map[string]string
+		messages      []anthropicRequestMessage
 	)
 
 	for _, msg := range req.Messages {
@@ -176,10 +211,7 @@ func (p *AnthropicProvider) buildPayload(req Request, stream bool) map[string]an
 				systemPrompts = append(systemPrompts, msg.Content)
 			}
 		} else {
-			messages = append(messages, map[string]string{
-				"role":    string(msg.Role),
-				"content": msg.Content,
-			})
+			messages = append(messages, anthropicRequestMessage{Role: string(msg.Role), Content: msg.Content})
 		}
 	}
 
@@ -188,18 +220,13 @@ func (p *AnthropicProvider) buildPayload(req Request, stream bool) map[string]an
 		maxTokens = 2048
 	}
 
-	payload := map[string]any{
-		jsonKeyModel:    req.Model,
-		"max_tokens":    maxTokens,
-		jsonKeyMessages: messages,
-	}
+	payload := anthropicRequestPayload{Model: req.Model, MaxTokens: maxTokens, Messages: messages}
 	if len(systemPrompts) > 0 {
-		payload["system"] = strings.Join(systemPrompts, "\n\n")
+		payload.System = strings.Join(systemPrompts, "\n\n")
 	}
-
-	if stream {
-		payload["stream"] = true
+	if req.OutputSchema != nil {
+		payload.OutputConfig = &anthropicOutputConfig{Format: anthropicOutputFormat{Type: "json_schema", Schema: *req.OutputSchema}}
 	}
-
+	payload.Stream = stream
 	return payload
 }

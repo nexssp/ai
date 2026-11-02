@@ -1,7 +1,7 @@
 @description "Run the reusable ai JSON critic pipeline"
 @require ../ as ai {
     provider: "openai",
-    model: "gpt-4o-mini",
+    model: "your-model-id",
     api_key_env: "OPENAI_API_KEY",
     timeout: "30s"
 }

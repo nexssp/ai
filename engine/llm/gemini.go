@@ -22,28 +22,52 @@ type GeminiProvider struct {
 	execAction *action.BuiltAction[Request, Response]
 }
 
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiGenerationConfig struct {
+	ResponseMimeType string `json:"responseMimeType,omitempty"`
+	MaxOutputTokens  int    `json:"maxOutputTokens,omitempty"`
+}
+
+type geminiRequestPayload struct {
+	Contents          []geminiContent         `json:"contents"`
+	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
+}
+
 // geminiWireResponse is the JSON shape of the :generateContent response.
 type geminiWireResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount int `json:"promptTokenCount"`
-		CandidatesTokens int `json:"candidatesTokenCount"`
-	} `json:"usageMetadata"`
+	Candidates    []geminiWireCandidate `json:"candidates"`
+	UsageMetadata geminiWireUsage       `json:"usageMetadata"`
+}
+
+type geminiWireCandidate struct {
+	Content geminiWireContent `json:"content"`
+}
+
+type geminiWireContent struct {
+	Parts []geminiWirePart `json:"parts"`
+}
+
+type geminiWirePart struct {
+	Text string `json:"text"`
+}
+
+type geminiWireUsage struct {
+	PromptTokenCount int `json:"promptTokenCount"`
+	CandidatesTokens int `json:"candidatesTokenCount"`
 }
 
 func NewGemini(cfg Config) *GeminiProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://generativelanguage.googleapis.com/v1beta"
-	}
-
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = "gemini-2.0-flash"
 	}
 
 	timeout := cfg.Timeout
@@ -67,6 +91,9 @@ func NewGemini(cfg Config) *GeminiProvider {
 
 		if req.Model == "" {
 			req.Model = p.cfg.DefaultModel
+		}
+		if req.Model == "" {
+			return Response{}, xerr.Validation("gemini: model is required in the request or provider configuration")
 		}
 
 		// Gemini carries the API key in the URL, so no Authorization header.
@@ -113,12 +140,18 @@ func (p *GeminiProvider) Name() string {
 }
 
 func (p *GeminiProvider) Complete(ctx context.Context, req Request) (Response, error) {
+	if req.Model == "" && p.cfg.DefaultModel == "" {
+		return Response{}, xerr.Validation("gemini: model is required in the request or provider configuration")
+	}
 	return p.execAction.Do(ctx, req)
 }
 
 func (p *GeminiProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
+	}
+	if req.Model == "" {
+		return nil, xerr.Validation("gemini: model is required in the request or provider configuration")
 	}
 
 	bodyBytes, err := p.codec.Marshal(p.buildPayload(req))
@@ -138,16 +171,16 @@ func (p *GeminiProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, xerr.Unavailable("gemini: stream request failed", err)
+		return nil, mapProviderTransportError(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if readErr != nil {
-			return nil, xerr.Unavailable("gemini: read stream error response", readErr)
+			return nil, mapProviderTransportError(readErr)
 		}
-		return nil, xerr.Unavailable(fmt.Sprintf("gemini: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
+		return nil, FromStreamHTTPStatus(resp.StatusCode, respBytes, p.Name())
 	}
 
 	return StreamSSE(ctx, resp.Body, DecodeGeminiChunk), nil
@@ -155,47 +188,35 @@ func (p *GeminiProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 
 // buildPayload converts an llm.Request into the Gemini-native payload shape.
 // Deterministic; no I/O; safe to call from tests.
-func (p *GeminiProvider) buildPayload(req Request) map[string]any {
-	type part struct {
-		Text string `json:"text"`
-	}
-
-	type content struct {
-		Role  string `json:"role"`
-		Parts []part `json:"parts"`
-	}
-
+func (p *GeminiProvider) buildPayload(req Request) geminiRequestPayload {
 	var (
-		contents       []content
-		sysInstruction *content
+		contents       []geminiContent
+		sysInstruction *geminiContent
 	)
 
 	for _, m := range req.Messages {
 		if m.Role == RoleSystem {
-			sysInstruction = &content{Parts: []part{{Text: m.Content}}}
+			sysInstruction = &geminiContent{Parts: []geminiPart{{Text: m.Content}}}
 		} else {
 			role := roleUser
 			if m.Role == RoleAssistant {
 				role = roleModel
 			}
 
-			contents = append(contents, content{
+			contents = append(contents, geminiContent{
 				Role:  role,
-				Parts: []part{{Text: m.Content}},
+				Parts: []geminiPart{{Text: m.Content}},
 			})
 		}
 	}
 
-	payload := map[string]any{"contents": contents}
-	if sysInstruction != nil {
-		payload["systemInstruction"] = sysInstruction
-	}
-
-	if req.JSONMode {
-		payload["generationConfig"] = map[string]string{
-			"responseMimeType": "application/json",
+	payload := geminiRequestPayload{Contents: contents, SystemInstruction: sysInstruction}
+	if req.JSONMode || req.MaxTokens > 0 {
+		generationConfig := &geminiGenerationConfig{MaxOutputTokens: req.MaxTokens}
+		if req.JSONMode {
+			generationConfig.ResponseMimeType = "application/json"
 		}
+		payload.GenerationConfig = generationConfig
 	}
-
 	return payload
 }

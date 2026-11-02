@@ -1,7 +1,7 @@
 @description "Run independent role prompts in parallel, then synthesize their findings"
 @require ../ {
     provider: "openai",
-    model: "gpt-4o-mini",
+    model: "your-model-id",
     api_key_env: "OPENAI_API_KEY",
     timeout: "30s"
 }

@@ -9,66 +9,72 @@ import (
 )
 
 type ProviderPreset struct {
-	Name         string
-	DefaultURL   string
-	DefaultModel string
-	EnvKeyNames  []string
-	IsDeepSeek   bool
+	Name        string
+	DefaultURL  string
+	EnvKeyNames []string
+	IsDeepSeek  bool
+	IsInception bool
 }
 
+// Presets contain provider endpoints and credential environment names only.
+// Model identities are selected by the application or supplied per request.
 var Presets = map[string]ProviderPreset{
 	providerOpenAI: {
-		Name:         providerOpenAI,
-		DefaultURL:   "https://api.openai.com/v1",
-		DefaultModel: "gpt-4o-mini",
-		EnvKeyNames:  []string{"OPENAI_API_KEY"},
+		Name:        providerOpenAI,
+		DefaultURL:  "https://api.openai.com/v1",
+		EnvKeyNames: []string{"OPENAI_API_KEY"},
 	},
 	"groq": {
-		Name:         "groq",
-		DefaultURL:   "https://api.groq.com/openai/v1",
-		DefaultModel: "llama-3.1-8b-instant",
-		EnvKeyNames:  []string{"GROQ_API_KEY"},
+		Name:        "groq",
+		DefaultURL:  "https://api.groq.com/openai/v1",
+		EnvKeyNames: []string{"GROQ_API_KEY"},
 	},
 	providerNVIDIA: {
-		Name:         providerNVIDIA,
-		DefaultURL:   "https://integrate.api.nvidia.com/v1",
-		DefaultModel: "meta/llama-3.3-70b-instruct",
-		EnvKeyNames:  []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "NVCF_API_KEY"},
+		Name:        providerNVIDIA,
+		DefaultURL:  "https://integrate.api.nvidia.com/v1",
+		EnvKeyNames: []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY", "NVCF_API_KEY"},
 	},
 	"nim": {
-		Name:         "nim",
-		DefaultURL:   "http://localhost:8000/v1",
-		DefaultModel: "meta/llama-3.3-70b-instruct",
-		EnvKeyNames:  []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"},
+		Name:        "nim",
+		DefaultURL:  "http://localhost:8000/v1",
+		EnvKeyNames: []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"},
 	},
 	providerDeepSeek: {
-		Name:         providerDeepSeek,
-		DefaultURL:   "https://api.deepseek.com/v1",
-		DefaultModel: "deepseek-flash",
-		EnvKeyNames:  []string{"DEEPSEEK_API_KEY"},
-		IsDeepSeek:   true,
+		Name:        providerDeepSeek,
+		DefaultURL:  "https://api.deepseek.com",
+		EnvKeyNames: []string{"DEEPSEEK_API_KEY"},
+		IsDeepSeek:  true,
 	},
 	providerOpenRouter: {
-		Name:         providerOpenRouter,
-		DefaultURL:   "https://openrouter.ai/api/v1",
-		DefaultModel: "meta-llama/llama-3.3-70b-instruct:free",
-		EnvKeyNames:  []string{"OPENROUTER_API_KEY", "OPENROUTER_KEY"},
+		Name:        providerOpenRouter,
+		DefaultURL:  "https://openrouter.ai/api/v1",
+		EnvKeyNames: []string{"OPENROUTER_API_KEY", "OPENROUTER_KEY"},
 	},
 	providerLMStudio: {
-		Name:         providerLMStudio,
-		DefaultURL:   "http://127.0.0.1:1234/v1",
-		DefaultModel: defaultOllamaModel,
-		EnvKeyNames:  []string{"LMSTUDIO_API_KEY"},
+		Name:        providerLMStudio,
+		DefaultURL:  "http://127.0.0.1:1234/v1",
+		EnvKeyNames: []string{"LMSTUDIO_API_KEY"},
 	},
 	"vllm": {
-		Name:         "vllm",
-		DefaultURL:   "http://localhost:8000/v1",
-		DefaultModel: "default",
-		EnvKeyNames:  []string{"VLLM_API_KEY"},
+		Name:        "vllm",
+		DefaultURL:  "http://localhost:8000/v1",
+		EnvKeyNames: []string{"VLLM_API_KEY"},
+	},
+	providerXAI: {
+		Name:        providerXAI,
+		DefaultURL:  "https://api.x.ai/v1",
+		EnvKeyNames: []string{"XAI_API_KEY"},
+	},
+	providerInception: {
+		Name:        providerInception,
+		DefaultURL:  "https://api.inceptionlabs.ai/v1",
+		EnvKeyNames: []string{"INCEPTION_API_KEY"},
+		IsInception: true,
 	},
 }
 
-// NewProvider resolves and constructs a configured LLM Provider.
+// NewProvider resolves and constructs a configured LLM Provider. Provider
+// presets never select a model; applications supply it in Config or Request.
 func NewProvider(providerType string, cfg Config) (Provider, error) {
 	pType := strings.ToLower(strings.TrimSpace(providerType))
 
@@ -81,15 +87,10 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 			cfg.BaseURL = preset.DefaultURL
 		}
 
-		if cfg.DefaultModel == "" {
-			cfg.DefaultModel = preset.DefaultModel
-		}
-
 		if cfg.APIKey == "" {
 			for _, key := range preset.EnvKeyNames {
 				if val := os.Getenv(key); val != "" {
 					cfg.APIKey = val
-
 					break
 				}
 			}
@@ -98,24 +99,34 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 		if preset.IsDeepSeek {
 			return NewDeepSeek(cfg), nil
 		}
+		if preset.IsInception {
+			return NewInception(cfg), nil
+		}
 
 		return NewOpenAI(cfg), nil
 	}
 
 	switch pType {
 	case providerAnthropic, "claude":
+		if cfg.Name == "" {
+			cfg.Name = providerAnthropic
+		}
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
-
 		return NewAnthropic(cfg), nil
 	case providerGemini, "google":
+		if cfg.Name == "" {
+			cfg.Name = providerGemini
+		}
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("GEMINI_API_KEY")
 		}
-
 		return NewGemini(cfg), nil
 	case providerOllama, "ollama_cloud":
+		if cfg.Name == "" {
+			cfg.Name = providerOllama
+		}
 		return NewOllama(cfg), nil
 	default:
 		return nil, xerr.BadRequest(fmt.Sprintf("unknown LLM provider: %q", providerType))

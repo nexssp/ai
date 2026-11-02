@@ -1,60 +1,52 @@
 # ai as a reusable NFlow package
 
-ai keeps provider protocols, HTTP requests, credentials, timeouts and normalized errors in Go, while NFlow defines orchestration and reusable workflow logic. Use NFlow composition rather than copying provider code into each application.
+`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.65.0`; the `nflow` runtime/CLI is installed separately from the Go module.
 
 ## Load the package
 
-From a workflow in this checkout, use the local ai module:
+From a workflow in this checkout:
 
 ```nflow
 @require ../ as ai {
     provider: "openai",
-    model: "gpt-4o-mini",
+    model: "your-model-id",
     api_key_env: "OPENAI_API_KEY",
+    decision_provider: "inception",
+    decision_model: "mercury-decide",
+    decision_api_key_env: "INCEPTION_API_KEY",
     timeout: "30s"
 }
 ```
 
-After publishing the planned ai `v0.1.0` tag, downstream projects can use:
+The `model` and `decision_model` values must be selected for the configured provider account; no default model or rate card is bundled. Inception's official Mercury Decide model ID is `mercury-decide`; see the [Decisions API docs](https://docs.inceptionlabs.ai/capabilities/decisions) and [model list](https://docs.inceptionlabs.ai/get-started/models). `api_key_env` and `decision_api_key_env` are environment-variable names, never secret values. Accepted options are `provider`, `model`, `api_key_env`, `timeout`, `base_url`, `decision_provider`, `decision_model`, `decision_api_key_env`, and `decision_base_url`.
 
-```nflow
-@require github.com/nexssp/ai v0.1.0 as ai {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    api_key_env: "OPENAI_API_KEY",
-    timeout: "30s"
-}
-```
+## Typed actions
 
-The example uses a planned version; it will resolve only after that tag is published. ai pins the public Flow `v0.42.0`, which provides embedded bundle source modules, alias-qualified `@include`, and block/list post-run `@assert` syntax. The accepted `@require` options are `provider`, `model`, `api_key_env`, `timeout`, and `base_url`. `api_key_env` is the name of an environment variable, not the secret value. The default timeout is 60 seconds.
+The library exports `ai.prompt`, `ai.team`, `ai.decide`, and `ai.cost.estimate`. Each action is backed by a Go request struct and a typed result. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
 
-## Actions and reusable workflow
+`ai.decide` requires a positive `max_output_tokens` cap. Anthropic's official Structured Outputs API (`decision_provider: "anthropic"`) receives the cap in `max_tokens` and a typed JSON Schema in `output_config.format`. OpenAI, Gemini, xAI, DeepSeek, and Inception chat (`decision_provider: "inception-chat"`) use locally validated JSON-mode adapters; the cap is sent using each provider's documented field, and reported output usage above the cap is rejected. The documented Inception native `/v1/decisions` and TypeSafe `/v1/systemone` request schemas expose no provider-enforced output cap, so those native adapters fail closed before HTTP dispatch. JSON mode is not claimed to be equivalent to a native decision endpoint or schema-constrained output. Unverified provider names are rejected rather than silently adapted.
 
-`ai.prompt` makes one completion and preserves existing Flow state fields. Its input supports `user`, optional `system`, `provider`, `model`, `base_url`, `max_tokens`, `temperature`, and `json_mode`; the result adds `content`, `model`, and token counts.
+The decision action validates the candidate allowlist and returns a typed `DecisionResponse` with ordered `[]DecisionAnswer`; NFlow owns the routing graph and branch behavior. See [`decision_route.nflow`](decision_route.nflow) for a working `match` example. Flow expression access to Go structs uses exported Go field names, so that workflow branches on `result.Answers[0].Choice`. `ai.cost.estimate` uses `max_output_tokens` as the nested decision's completion-cost basis, but it does not bill, reserve, or authorize selector spend. The application host guard must approve and reserve cost before provider dispatch.
 
-`ai.team` runs two or more declared role turns in order in a single Flow invocation. Each role can see the goal and earlier answers. It does not create persistent agents, sessions, or cross-run memory.
+## Reusable critic workflow
 
-ai embeds and explicitly exports `nflows/lib/critic.nflow`. A consumer can import it from the same required bundle without copying the file:
+The bundle embeds and exports `nflows/lib/critic.nflow`; import it without copying the module:
 
 ```nflow
 @include ai:nflows/lib/critic.nflow AS critic
 {
-    ...,
-    goal: .goal,
-    output: .output
-}
--> critic.pipeline.review
+    goal: "Check whether this output answers the request safely.",
+    output: "The proposed output to review."
+} -> critic.pipeline.review
 ```
 
-The included pipeline calls `ai.prompt` from the same bundle. The public module pipeline is `critic.pipeline.review`; the local `nflows/critic.nflow` wrapper keeps the legacy `pipeline.si_ai_critic` entrypoint and also defines a `pipeline.review` alias; `roles.nflow` shows sequential roles, and `parallel_roles.nflow` shows independent concurrent prompts.
+The critic sends the goal and proposed output as explicit prompt context and asks for JSON text with `approved`, `score`, `critique`, and `defects` fields. Importing the module does not run the review. Other fixtures include [`critic.nflow`](critic.nflow), [`roles.nflow`](roles.nflow), and [`parallel_roles.nflow`](parallel_roles.nflow).
 
 ## Checks
 
-The automated tests use fake providers and do not need a live API key:
+The tests use fake providers and need no live API credentials:
 
 ```sh
 go test ./...
 task check
 ```
-
-Build public Flow `v0.42.0` for the CLI integration test when needed. Install the repository hooks with `pre-commit install --hook-type pre-commit --hook-type pre-push`.

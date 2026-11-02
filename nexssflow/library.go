@@ -1,4 +1,4 @@
-// Package nexssflow exposes reusable AI actions to Flow v0.42 and newer.
+// Package nexssflow exposes reusable AI actions to Flow v0.65.0 and newer.
 package nexssflow
 
 import (
@@ -18,7 +18,10 @@ const ID = "ai"
 
 const criticModule = "nflows/lib/critic.nflow"
 
-var acceptedOptions = []string{"provider", "model", "api_key_env", "timeout", "base_url"}
+var acceptedOptions = []string{
+	"provider", "model", "api_key_env", "timeout", "base_url",
+	"decision_provider", "decision_model", "decision_api_key_env", "decision_base_url",
+}
 
 func init() {
 	compiler.Register(ID, Bundle)
@@ -26,11 +29,15 @@ func init() {
 
 // GlobalOptions are supplied by Flow's @require options block.
 type GlobalOptions struct {
-	APIKeyEnv    string
-	Timeout      time.Duration
-	DefaultModel string
-	Provider     string
-	BaseURL      string
+	APIKeyEnv         string
+	Timeout           time.Duration
+	DefaultModel      string
+	Provider          string
+	BaseURL           string
+	DecisionAPIKeyEnv string
+	DecisionModel     string
+	DecisionProvider  string
+	DecisionBaseURL   string
 }
 
 // LLMDecl contains the per-call values accepted by ai.prompt.
@@ -40,7 +47,14 @@ type LLMDecl struct {
 	BaseURL  string
 }
 
-// Bundle exposes AI actions as a Flow v0.42 library using canonical names.
+// DecisionDecl selects the separately configured decision-capable provider.
+type DecisionDecl struct {
+	Provider string
+	Model    string
+	BaseURL  string
+}
+
+// Bundle exposes AI actions as a Flow v0.65.0 library using canonical names.
 func Bundle(raw map[string]string) compiler.Bundle {
 	global, err := options(raw)
 	builder := providerBuilder(buildProvider)
@@ -57,11 +71,15 @@ func options(raw map[string]string) (GlobalOptions, error) {
 		}
 	}
 	global := GlobalOptions{
-		APIKeyEnv:    raw["api_key_env"],
-		Timeout:      60 * time.Second,
-		DefaultModel: raw["model"],
-		Provider:     raw["provider"],
-		BaseURL:      raw["base_url"],
+		APIKeyEnv:         raw["api_key_env"],
+		Timeout:           60 * time.Second,
+		DefaultModel:      raw["model"],
+		Provider:          raw["provider"],
+		BaseURL:           raw["base_url"],
+		DecisionAPIKeyEnv: raw["decision_api_key_env"],
+		DecisionModel:     raw["decision_model"],
+		DecisionProvider:  raw["decision_provider"],
+		DecisionBaseURL:   raw["decision_base_url"],
 	}
 	if raw["timeout"] != "" {
 		d, err := time.ParseDuration(raw["timeout"])
@@ -77,6 +95,10 @@ func options(raw map[string]string) (GlobalOptions, error) {
 }
 
 func bundleWithBuilder(global GlobalOptions, builder providerBuilder) compiler.Bundle {
+	return bundleWithBuilders(global, builder, buildDecisionProvider)
+}
+
+func bundleWithBuilders(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder) compiler.Bundle {
 	return compiler.Bundle{
 		ID:              ID,
 		SourceModules:   siaimodules.SourceModules,
@@ -87,6 +109,8 @@ func bundleWithBuilder(global GlobalOptions, builder providerBuilder) compiler.B
 			Actions: []action.AnyAction{
 				newPromptActionWith(global, builder),
 				newTeamActionWith(global, builder),
+				newDecisionActionWith(global, decisions),
+				newCostEstimateAction(),
 			},
 		}},
 	}

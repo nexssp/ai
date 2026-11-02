@@ -13,6 +13,19 @@ import (
 	"github.com/nexssp/transport/codec"
 )
 
+type embeddingRequestPayload struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+type embeddingWireResponse struct {
+	Data []embeddingWireData `json:"data"`
+}
+
+type embeddingWireData struct {
+	Embedding []float32 `json:"embedding"`
+}
+
 type openaiEmbedder struct {
 	baseURL string
 	apiKey  string
@@ -45,10 +58,7 @@ func (e *openaiEmbedder) Embed(ctx context.Context, texts ...string) ([][]float3
 		return nil, nil
 	}
 
-	payload := map[string]any{
-		"model": e.model,
-		"input": texts,
-	}
+	payload := embeddingRequestPayload{Model: e.model, Input: texts}
 
 	bodyBytes, err := e.codec.Marshal(payload)
 	if err != nil {
@@ -83,11 +93,7 @@ func (e *openaiEmbedder) Embed(ctx context.Context, texts ...string) ([][]float3
 		return nil, xerr.Unavailable(fmt.Sprintf("embedder status %d: %s", resp.StatusCode, string(respBytes)))
 	}
 
-	var res struct {
-		Data []struct {
-			Embedding []float32 `json:"embedding"`
-		} `json:"data"`
-	}
+	var res embeddingWireResponse
 
 	if err := e.codec.Unmarshal(respBytes, &res); err != nil {
 		return nil, xerr.Internal("embedder unmarshal response error", err)

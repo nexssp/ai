@@ -30,18 +30,25 @@ func TestDoJSONHTTPErrorKinds(t *testing.T) {
 		kind   xerr.Kind
 	}{
 		{"bad request", 400, `{}`, xerr.KindBadRequest},
-		{"transient bad request", 400, `{"error":{"code":"overloaded"}}`, xerr.KindUnavailable},
+		{"context length is terminal", 400, `{"error":{"code":"context_length_exceeded"}}`, xerr.KindBadRequest},
+		{"overloaded code on bad request remains terminal", 400, `{"error":{"code":"overloaded"}}`, xerr.KindBadRequest},
+		{"rate limit code on bad request remains terminal", 400, `{"error":{"code":"rate_limit_exceeded"}}`, xerr.KindBadRequest},
 		{"unauthorized", 401, `{}`, xerr.KindUnauthorized},
+		{"payment required quota", 402, `{"error":{"code":"insufficient_quota"}}`, xerr.KindForbidden},
 		{"forbidden", 403, `{}`, xerr.KindForbidden},
 		{"not found", 404, `{}`, xerr.KindNotFound},
 		{"request timeout", 408, `{}`, xerr.KindTimeout},
 		{"conflict", 409, `{}`, xerr.KindConflict},
-		{"rate limit", 429, `{}`, xerr.KindTooManyRequests},
+		{"rate limit without provider code", 429, `{}`, xerr.KindTooManyRequests},
+		{"structured rate limit", 429, `{"error":{"code":"rate_limit_exceeded"}}`, xerr.KindTooManyRequests},
+		{"quota on rate limit status", 429, `{"error":{"code":"insufficient_quota"}}`, xerr.KindForbidden},
+		{"unknown rate limit code is terminal", 429, `{"error":{"code":"provider_specific_unknown"}}`, xerr.KindInternal},
 		{"server failure", 500, `{}`, xerr.KindUnavailable},
+		{"not implemented", 501, `{}`, xerr.KindInternal},
 		{"bad gateway", 502, `{}`, xerr.KindUnavailable},
 		{"unavailable", 503, `{}`, xerr.KindUnavailable},
-		{"gateway timeout", 504, `{}`, xerr.KindUnavailable},
-		{"invalid response", 200, `not JSON`, xerr.KindUnavailable},
+		{"gateway timeout", 504, `{}`, xerr.KindTimeout},
+		{"invalid response", 200, `not JSON`, xerr.KindInternal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -53,6 +60,25 @@ func TestDoJSONHTTPErrorKinds(t *testing.T) {
 				URL: server.URL, Body: map[string]any{"user": "test"},
 				Client: server.Client(), Codec: codec.Default, ProviderName: "fake",
 			})
+			requireHTTPErrorKind(t, err, tc.kind)
+		})
+	}
+}
+
+func TestFromStreamHTTPStatusKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		kind   xerr.Kind
+	}{
+		{"authorization", http.StatusUnauthorized, xerr.KindUnauthorized},
+		{"rate limit", http.StatusTooManyRequests, xerr.KindTooManyRequests},
+		{"server unavailable", http.StatusServiceUnavailable, xerr.KindUnavailable},
+		{"gateway timeout", http.StatusGatewayTimeout, xerr.KindTimeout},
+		{"unexpected successful status", http.StatusCreated, xerr.KindInternal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := FromStreamHTTPStatus(tc.status, []byte(`{}`), "fake")
 			requireHTTPErrorKind(t, err, tc.kind)
 		})
 	}
@@ -75,9 +101,11 @@ func TestDoJSONTransportErrorKindsAndCauses(t *testing.T) {
 	}{
 		{"deadline", context.DeadlineExceeded, xerr.KindTimeout},
 		{"canceled", context.Canceled, xerr.KindCanceled},
-		{"network timeout", &net.DNSError{Err: "timeout", IsTimeout: true}, xerr.KindUnavailable},
+		{"network timeout", &net.DNSError{Err: "timeout", IsTimeout: true}, xerr.KindTimeout},
+		{"temporary DNS", &net.DNSError{Err: "temporary failure", IsTemporary: true}, xerr.KindUnavailable},
+		{"permanent DNS", &net.DNSError{Err: "no such host", IsNotFound: true}, xerr.KindInternal},
 		{"connection", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}, xerr.KindUnavailable},
-		{"unknown transport failure", errors.New("transport failed"), xerr.KindUnavailable},
+		{"unclassified transport failure", errors.New("transport failed"), xerr.KindInternal},
 	} {
 		for _, readBody := range []bool{false, true} {
 			name := tc.name + "/request"

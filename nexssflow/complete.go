@@ -9,58 +9,86 @@ import (
 	"github.com/nexssp/ai/engine/llm"
 )
 
-func validateUser(req map[string]any) error {
-	if strings.TrimSpace(stringOf(req["user"])) == "" {
-		return xerr.Validation("ai: user field is required")
+func validateUser(user string) error {
+	if strings.TrimSpace(user) == "" {
+		return xerr.Validation("ai.prompt: user field is required")
 	}
 	return nil
 }
 
-// completeAndMerge runs one untyped completion and folds the response
-// into the incoming map. Pipeline state survives; content, model, and
-// token counts become additional keys.
-//
-// The merge is the whole point of CQRS at the action boundary: a
-// pipeline stage must not lose `goal`, `attempt`, or any other field
-// the surrounding flow depends on just because this call completed.
-func completeAndMerge(
-	ctx context.Context,
-	provider llm.Provider,
-	req map[string]any,
-	system, model string,
-) (map[string]any, error) {
-	if err := validateUser(req); err != nil {
-		return nil, err
+// complete runs exactly one provider attempt and returns an explicit typed
+// result. Candidate selection, budget checks, and fallback policy belong to
+// the calling workflow, not this action.
+func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (PromptResult, error) {
+	if err := validateUser(req.User); err != nil {
+		return PromptResult{}, err
+	}
+	priced := req.RateCardID != "" || req.ExpectedCurrency != nil
+	if err := validatePricingFields("ai.prompt", req.Model, req.RateCardID, req.ExpectedCurrency, false); err != nil {
+		return PromptResult{}, err
+	}
+	if priced {
+		if err := validateConfiguredPricing("ai.prompt", req.Model, req.RateCardID, req.ExpectedCurrency); err != nil {
+			return PromptResult{}, err
+		}
+	}
+	if err := validateTokenBasis("ai.prompt", req.PromptTokens, req.CachedPromptTokens, req.CompletionTokens, priced); err != nil {
+		return PromptResult{}, err
+	}
+	if req.MaxTokens < 0 {
+		return PromptResult{}, xerr.Validation("ai.prompt: max_tokens cannot be negative")
 	}
 	if err := requireProvider(provider); err != nil {
-		return nil, err
+		return PromptResult{}, err
 	}
-	user := stringOf(req["user"])
 
 	messages := make([]llm.Message, 0, 2)
-	if system != "" {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: system})
+	if req.System != "" {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: req.System})
 	}
-	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: user})
+	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: req.User})
 
-	jsonMode, _ := req["json_mode"].(bool)
-	resp, err := provider.Complete(ctx, llm.Request{
-		Model:       model,
-		Messages:    messages,
-		MaxTokens:   intOf(req["max_tokens"]),
-		Temperature: floatOf(req["temperature"]),
-		JSONMode:    jsonMode,
+	response, err := provider.Complete(ctx, llm.Request{
+		Model:                       req.Model,
+		CandidateID:                 req.CandidateID,
+		AttemptID:                   req.AttemptID,
+		RateCardID:                  req.RateCardID,
+		ExpectedCurrency:            cloneCurrency(req.ExpectedCurrency),
+		EstimatedPromptTokens:       req.PromptTokens,
+		EstimatedCachedPromptTokens: req.CachedPromptTokens,
+		EstimatedCompletionTokens:   req.CompletionTokens,
+		Messages:                    messages,
+		MaxTokens:                   req.MaxTokens,
+		Temperature:                 req.Temperature,
+		JSONMode:                    req.JSONMode,
+		ReasoningEffort:             req.ReasoningEffort,
 	})
 	if err != nil {
-		return nil, completionError(err)
+		return PromptResult{}, completionError(err)
 	}
 
-	out := shallowCopy(req)
-	out["content"] = resp.Content
-	out["model"] = resp.Model
-	out["prompt_tokens"] = resp.PromptTokens
-	out["comp_tokens"] = resp.CompTokens
-	out["total_tokens"] = resp.PromptTokens + resp.CompTokens
-
-	return out, nil
+	model := response.Model
+	if model == "" {
+		model = req.Model
+	}
+	response.Model = model
+	usage := llm.FromResponse(response)
+	if priced {
+		usage = llm.FromResponseForRateCard(response, req.RateCardID, *req.ExpectedCurrency)
+	}
+	return PromptResult{
+		CandidateID:        req.CandidateID,
+		AttemptID:          req.AttemptID,
+		RateCardID:         req.RateCardID,
+		ExpectedCurrency:   cloneCurrency(req.ExpectedCurrency),
+		Context:            req.Context,
+		Provider:           provider.Name(),
+		Content:            response.Content,
+		Model:              model,
+		PromptTokens:       response.PromptTokens,
+		CachedPromptTokens: response.CachedPromptTokens,
+		CompTokens:         response.CompTokens,
+		TotalTokens:        response.PromptTokens + response.CompTokens,
+		Usage:              usage,
+	}, nil
 }

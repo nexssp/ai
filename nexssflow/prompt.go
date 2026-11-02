@@ -11,32 +11,28 @@ import (
 
 type providerBuilder func(GlobalOptions, LLMDecl) (llm.Provider, error)
 
-// newPromptAction builds the archive's generic ai.prompt action. The provider
-// is resolved per call, preserving the legacy action's mixed-provider behavior.
+// newPromptAction builds the reusable ai.prompt action.
 func newPromptAction(global GlobalOptions) action.AnyAction {
 	return newPromptActionWith(global, buildProvider)
 }
 
-// newPromptActionWith keeps the provider seam explicit so tests can exercise
-// the real action without making a provider or network call.
+// newPromptActionWith keeps provider construction injectable for deterministic tests.
 func newPromptActionWith(global GlobalOptions, build providerBuilder) action.AnyAction {
-	return action.New("ai.prompt", func(ctx context.Context, req map[string]any) (map[string]any, error) {
-		if build == nil {
-			return nil, xerr.Internal("ai: provider builder is unavailable")
+	return action.New[PromptRequest, PromptResult]("ai.prompt", func(ctx context.Context, req PromptRequest) (PromptResult, error) {
+		if err := validateUser(req.User); err != nil {
+			return PromptResult{}, err
 		}
-		if err := validateUser(req); err != nil {
-			return nil, err
+		if build == nil {
+			return PromptResult{}, xerr.Internal("ai.prompt: provider builder is unavailable")
 		}
 		provider, err := build(global, LLMDecl{
-			Provider: stringOf(req["provider"]),
-			Model:    stringOf(req["model"]),
-			BaseURL:  stringOf(req["base_url"]),
+			Provider: req.Provider,
+			Model:    req.Model,
+			BaseURL:  req.BaseURL,
 		})
 		if err != nil {
-			return nil, completionError(err)
+			return PromptResult{}, completionError(err)
 		}
-		system := stringOf(req["system"])
-		model := stringOf(req["model"])
-		return completeAndMerge(ctx, provider, req, system, model)
-	}).Description("Prompt an LLM and merge its response into the current Flow state").Tag("ai", "prompt").Build()
+		return complete(ctx, provider, req)
+	}).Description("Run one LLM attempt and return typed content and usage").Tag("ai", "prompt").Build()
 }

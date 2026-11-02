@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,9 +43,10 @@ type Price struct {
 //	         provider does not differentiate by time-of-day.
 //	Currency the currency in which Peak and OffPeak are denominated.
 type PriceCard struct {
-	Currency cost.Currency `json:"currency" yaml:"currency"`
-	Peak     Price         `json:"peak"     yaml:"peak"`
-	OffPeak  *Price        `json:"off_peak,omitempty" yaml:"off_peak,omitempty"`
+	RateCardID string        `json:"rate_card_id" yaml:"rate_card_id"`
+	Currency   cost.Currency `json:"currency" yaml:"currency"`
+	Peak       Price         `json:"peak"     yaml:"peak"`
+	OffPeak    *Price        `json:"off_peak,omitempty" yaml:"off_peak,omitempty"`
 }
 
 // OffPeakWindow is the daily UTC window during which the OffPeak rate
@@ -57,7 +60,7 @@ type OffPeakWindow struct {
 // concurrent readers and occasional writers (Register / reload).
 type PriceCatalog struct {
 	mu       sync.RWMutex
-	cards    map[string]PriceCard
+	cards    map[string]map[string]PriceCard
 	window   OffPeakWindow
 	loadedAt time.Time
 }
@@ -66,12 +69,11 @@ type PriceCatalog struct {
 // every provider that builds a Response.
 var GlobalCatalog = NewPriceCatalog()
 
-// NewPriceCatalog returns a catalog pre-populated from the built-in
-// DefaultPricingTemplate. Callers may overwrite it with LoadFromFile,
-// LoadFromURL, or LoadFromYAML.
+// NewPriceCatalog returns an empty-by-default catalog. Applications load their
+// provider/model rate cards, currencies, and billing windows from configuration.
 func NewPriceCatalog() *PriceCatalog {
 	c := &PriceCatalog{
-		cards: make(map[string]PriceCard, 64),
+		cards: make(map[string]map[string]PriceCard, 64),
 	}
 	if err := c.LoadFromYAML([]byte(DefaultPricingTemplate)); err != nil {
 		panic(err)
@@ -80,27 +82,48 @@ func NewPriceCatalog() *PriceCatalog {
 	return c
 }
 
-// Register installs or replaces a rate card for a model.
-func (c *PriceCatalog) Register(model string, card PriceCard) {
-	if model == "" {
-		return
+// Register installs or replaces a rate card for a model. Both the model and
+// card identity are required; an incomplete card is never registered.
+func (c *PriceCatalog) Register(model string, card PriceCard) error {
+	if strings.TrimSpace(model) == "" {
+		return xerr.Validation("price catalog: model identifier is required")
 	}
-
+	if strings.TrimSpace(card.RateCardID) == "" {
+		return xerr.Validation("price catalog: rate_card_id is required for model " + model)
+	}
 	if card.Currency == (cost.Currency{}) {
-		card.Currency = cost.USD
+		return xerr.Validation("price catalog: currency is required for rate card " + card.RateCardID)
 	}
 
 	c.mu.Lock()
-	c.cards[model] = card
+	if c.cards[model] == nil {
+		c.cards[model] = make(map[string]PriceCard)
+	}
+	c.cards[model][card.RateCardID] = card
 	c.mu.Unlock()
+	return nil
 }
 
-// Get returns the rate card for a model.
+// Get returns a model's card only when exactly one card is configured for it.
+// Ambiguous model-only estimates fail closed; use GetRateCard with an explicit ID.
 func (c *PriceCatalog) Get(model string) (PriceCard, bool) {
 	c.mu.RLock()
-	card, ok := c.cards[model]
+	byID := c.cards[model]
 	c.mu.RUnlock()
+	if len(byID) != 1 {
+		return PriceCard{}, false
+	}
+	for _, card := range byID {
+		return card, true
+	}
+	return PriceCard{}, false
+}
 
+// GetRateCard returns the exact card registered for the model and ID.
+func (c *PriceCatalog) GetRateCard(model, rateCardID string) (PriceCard, bool) {
+	c.mu.RLock()
+	card, ok := c.cards[model][rateCardID]
+	c.mu.RUnlock()
 	return card, ok
 }
 
@@ -130,76 +153,60 @@ func (c *PriceCatalog) IsOffPeak(t time.Time) bool {
 
 // ── YAML loading ────────────────────────────────────────────────────────────
 
-// LoadFromYAML accepts two formats:
-//
-//	New (preferred):
-//	  currency: USD
-//	  window: { start_utc: "16:30", end_utc: "00:30" }
-//	  models:
-//	    deepseek-chat:
-//	      peak:     { prompt_per_1k: 0.00027, prompt_cache_hit_per_1k: 0.00007, comp_per_1k: 0.00110 }
-//	      off_peak: { prompt_per_1k: 0.000135, prompt_cache_hit_per_1k: 0.000035, comp_per_1k: 0.00055 }
-//
-//	Legacy:
-//	  gpt-4o: { prompt_per_1k: 0.00250, comp_per_1k: 0.01000 }
-//
-// The new shape wins when a `models:` key is present.
+// LoadFromYAML accepts an explicit models map with per-card or top-level
+// currency. Every model entry must carry an explicit rate_card_id; cards
+// without an explicit currency are rejected instead of assuming one.
 func (c *PriceCatalog) LoadFromYAML(data []byte) error {
-	var newFmt struct {
-		Currency cost.Currency       `yaml:"currency"`
-		Window   OffPeakWindow       `yaml:"window"`
-		Models   map[string]cardYAML `yaml:"models"`
-	}
-	if err := yaml.Unmarshal(data, &newFmt); err == nil && len(newFmt.Models) > 0 {
-		defaultCur := newFmt.Currency
-		if defaultCur == (cost.Currency{}) {
-			defaultCur = cost.USD
-		}
-
-		c.mu.Lock()
-		for name, m := range newFmt.Models {
-			card := PriceCard(m)
-			if card.Currency == (cost.Currency{}) {
-				card.Currency = defaultCur
-			}
-
-			c.cards[name] = card
-		}
-
-		c.window = newFmt.Window
-		c.loadedAt = time.Now()
-		c.mu.Unlock()
-
-		return nil
-	}
-
-	var oldFmt map[string]Price
-	if err := yaml.Unmarshal(data, &oldFmt); err != nil {
+	var newFmt priceCatalogYAML
+	if err := yaml.Unmarshal(data, &newFmt); err != nil {
 		return xerr.BadRequest("price catalog: unmarshal yaml", err)
+	}
+	if newFmt.Models == nil {
+		return xerr.Validation("price catalog: models map is required")
+	}
+
+	cards := make(map[string]map[string]PriceCard, len(newFmt.Models))
+	for name, m := range newFmt.Models {
+		if name == "" {
+			return xerr.Validation("price catalog: model identifier is required")
+		}
+		card := PriceCard(m)
+		if strings.TrimSpace(card.RateCardID) == "" {
+			return xerr.Validation("price catalog: rate_card_id is required for model " + name)
+		}
+		if card.Currency == (cost.Currency{}) {
+			card.Currency = newFmt.Currency
+		}
+		if card.Currency == (cost.Currency{}) {
+			return xerr.Validation("price catalog: currency is required for model " + name)
+		}
+		cards[name] = map[string]PriceCard{card.RateCardID: card}
 	}
 
 	c.mu.Lock()
-	for name, p := range oldFmt {
-		if name == "window" || name == "currency" || name == "models" {
-			continue
+	for name, byID := range cards {
+		if c.cards[name] == nil {
+			c.cards[name] = make(map[string]PriceCard)
 		}
-
-		c.cards[name] = PriceCard{
-			Currency: cost.USD,
-			Peak:     p,
-		}
+		maps.Copy(c.cards[name], byID)
 	}
-
+	c.window = newFmt.Window
 	c.loadedAt = time.Now()
 	c.mu.Unlock()
-
 	return nil
 }
 
 type cardYAML struct {
-	Currency cost.Currency `yaml:"currency"`
-	Peak     Price         `yaml:"peak"`
-	OffPeak  *Price        `yaml:"off_peak,omitempty"`
+	RateCardID string        `yaml:"rate_card_id"`
+	Currency   cost.Currency `yaml:"currency"`
+	Peak       Price         `yaml:"peak"`
+	OffPeak    *Price        `yaml:"off_peak,omitempty"`
+}
+
+type priceCatalogYAML struct {
+	Currency cost.Currency       `yaml:"currency"`
+	Window   OffPeakWindow       `yaml:"window"`
+	Models   map[string]cardYAML `yaml:"models"`
 }
 
 func (c *PriceCatalog) LoadFromFile(filePath string) error {
@@ -284,10 +291,45 @@ func CalculateCost(
 	at time.Time,
 ) (cost.Micro, cost.Currency, bool) {
 	card, found := GlobalCatalog.Get(model)
-	if !found {
+	if !found || card.Currency == (cost.Currency{}) {
 		return 0, cost.Currency{}, false
 	}
+	return calculateCardCost(card, promptTokens, cachedTokens, compTokens, at)
+}
 
+// CalculateCostForRateCard estimates cost only when the exact configured
+// rate-card identity and expected currency both match. A missing card,
+// currency, or currency mismatch returns known=false and never a zero-cost
+// success. Explicit-card estimates round up to the next micro-unit so a
+// budget preflight cannot pass on a sub-micro rounding underestimate.
+func CalculateCostForRateCard(
+	model, rateCardID string,
+	expectedCurrency cost.Currency,
+	promptTokens, cachedTokens, compTokens int,
+	at time.Time,
+) (cost.Micro, cost.Currency, bool) {
+	if strings.TrimSpace(model) == "" || strings.TrimSpace(rateCardID) == "" || expectedCurrency == (cost.Currency{}) {
+		return 0, cost.Currency{}, false
+	}
+	card, found := GlobalCatalog.GetRateCard(model, rateCardID)
+	if !found || card.Currency == (cost.Currency{}) || card.Currency != expectedCurrency {
+		return 0, cost.Currency{}, false
+	}
+	return calculateCardCostConservative(card, promptTokens, cachedTokens, compTokens, at)
+}
+
+func calculateCardCost(card PriceCard, promptTokens, cachedTokens, compTokens int, at time.Time) (cost.Micro, cost.Currency, bool) {
+	return calculateCardCostRounded(card, promptTokens, cachedTokens, compTokens, at, false)
+}
+
+func calculateCardCostConservative(card PriceCard, promptTokens, cachedTokens, compTokens int, at time.Time) (cost.Micro, cost.Currency, bool) {
+	return calculateCardCostRounded(card, promptTokens, cachedTokens, compTokens, at, true)
+}
+
+func calculateCardCostRounded(card PriceCard, promptTokens, cachedTokens, compTokens int, at time.Time, roundUp bool) (cost.Micro, cost.Currency, bool) {
+	if card.Currency == (cost.Currency{}) {
+		return 0, cost.Currency{}, false
+	}
 	rate := card.Peak
 	if card.OffPeak != nil && GlobalCatalog.IsOffPeak(at) {
 		rate = *card.OffPeak
@@ -302,13 +344,20 @@ func CalculateCost(
 		cacheHitRate = rate.PromptPer1k
 	}
 
-	promptUSD := (float64(missTokens)/1000.0)*rate.PromptPer1k +
+	promptAmount := (float64(missTokens)/1000.0)*rate.PromptPer1k +
 		(float64(hitTokens)/1000.0)*cacheHitRate
-	compUSD := (float64(compTokens) / 1000.0) * rate.CompPer1k
+	completionAmount := (float64(compTokens) / 1000.0) * rate.CompPer1k
 
-	total := promptUSD + compUSD
+	total := promptAmount + completionAmount
 	if math.IsNaN(total) || math.IsInf(total, 0) || total < 0 {
 		return 0, card.Currency, false
+	}
+	if roundUp {
+		micros := total * 1_000_000
+		if math.IsNaN(micros) || math.IsInf(micros, 0) || micros >= float64(math.MaxInt64) {
+			return 0, card.Currency, false
+		}
+		return cost.Micro(math.Ceil(micros)), card.Currency, true
 	}
 
 	return cost.ToMicro(total), card.Currency, true
@@ -349,80 +398,10 @@ func parseHHMM(s string) (int, bool) {
 
 // ── default template ────────────────────────────────────────────────────────
 
-// DefaultPricingTemplate is loaded by NewPriceCatalog at process start.
-//
-// ⚠️  The numbers below are placeholders for any field you have not
-// verified against the provider's published rate card. Only the fields
-// that were already present in this repository before M1.5 have been
-// preserved verbatim; every new field (prompt_cache_hit_per_1k,
-// off_peak, currency) is a zero or a commented hint.
-//
-// To make cost reporting trustworthy:
-//
-//  1. Edit the YAML below, or ship a pricing.yml and call
-//     GlobalCatalog.LoadFromFile("pricing.yml") at startup.
-//  2. Model names must match exactly what the provider returns in the
-//     `model` field of its response. `deepseek-flash` is not a real
-//     DeepSeek model name — verify what you actually receive and align.
-//  3. Every new model you support must appear here, or CalculateCost
-//     returns ok=false and the runner shows `-` in the cost column.
-const DefaultPricingTemplate = `# Rates are USD (unless a model overrides) per 1,000 tokens.
-#
-# window:      the daily UTC window during which off_peak applies.
-# currency:    the default currency for every model in this file.
-# models.X:    the rate card. peak is required; off_peak is optional.
-#
-# prompt_cache_hit_per_1k: leave equal to prompt_per_1k when the provider
-#                          does not offer a distinct cached-input rate.
-
-currency: USD
-
-window:
-  start_utc: "16:30"
-  end_utc:   "00:30"
-
-models:
-  gpt-4o:
-    peak:
-      prompt_per_1k:          0.00250
-      prompt_cache_hit_per_1k: 0.00125
-      comp_per_1k:            0.01000
-
-  gpt-4o-mini:
-    peak:
-      prompt_per_1k:          0.00015
-      prompt_cache_hit_per_1k: 0.000075
-      comp_per_1k:            0.00060
-
-  claude-3-5-sonnet-20241022:
-    peak:
-      prompt_per_1k:          0.00300
-      prompt_cache_hit_per_1k: 0.00030
-      comp_per_1k:            0.01500
-
-  deepseek-chat:
-    peak:
-      prompt_per_1k:          0.00027
-      prompt_cache_hit_per_1k: 0.00027
-      comp_per_1k:            0.00110
-    # off_peak: paste the published discounted rate here.
-
-  deepseek-reasoner:
-    peak:
-      prompt_per_1k:          0.00055
-      prompt_cache_hit_per_1k: 0.00055
-      comp_per_1k:            0.00219
-    # off_peak: paste the published discounted rate here.
-
-  llama-3.3-70b-versatile:
-    peak:
-      prompt_per_1k:          0.00059
-      prompt_cache_hit_per_1k: 0.00059
-      comp_per_1k:            0.00079
-
-  meta/llama-3.3-70b-instruct:
-    peak:
-      prompt_per_1k:          0.00070
-      prompt_cache_hit_per_1k: 0.00070
-      comp_per_1k:            0.00090
+// DefaultPricingTemplate intentionally has no provider/model IDs, rates,
+// currency, or billing window. Applications must load those from their
+// operator-managed rate-card configuration.
+const DefaultPricingTemplate = `# Add externally verified rate cards below.
+# Set currency globally or on each model entry; no currency is assumed.
+models: {}
 `

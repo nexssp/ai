@@ -102,16 +102,16 @@ func TestRolesWorkflowSharesMessagesWithinOneFlowRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute roles workflow: %v", err)
 	}
-	out, ok := execution.Output.(map[string]any)
+	out, ok := execution.Output.(TeamResult)
 	if !ok {
-		t.Fatalf("workflow output type = %T, want map[string]any", execution.Output)
+		t.Fatalf("workflow output type = %T, want TeamResult", execution.Output)
 	}
-	if out["content"] != lastReply || out["goal"] != goal || out["prompt_tokens"] != 10 || out["comp_tokens"] != 6 || out["total_tokens"] != 16 {
-		t.Fatalf("unexpected team output: %#v", out)
+	if out.Content != lastReply || out.Goal != goal || out.PromptTokens != 10 || out.CompTokens != 6 || out.TotalTokens != 16 {
+		t.Fatalf("unexpected team output: %+v", out)
 	}
-	turns, ok := out["agents"].([]RoleTurn)
-	if !ok || len(turns) != 2 {
-		t.Fatalf("agent turns = %#v, want two role results", out["agents"])
+	turns := out.Agents
+	if len(turns) != 2 {
+		t.Fatalf("agent turns = %#v, want two role results", turns)
 	}
 	if turns[0].Name != "analyst" || turns[0].Role != "Analyst" || turns[0].Content != firstReply ||
 		turns[1].Name != "reviewer" || turns[1].Role != "Reviewer" || turns[1].Content != lastReply {
@@ -146,10 +146,10 @@ func TestTeamRequiresAtLeastTwoRoleAgentsBeforeProviderAccess(t *testing.T) {
 		providerBuilds++
 		return nil, nil
 	})
-	_, err := act.DoAny(context.Background(), map[string]any{
-		"goal": "Only one role was declared.",
-		"agents": []any{
-			map[string]any{"name": "analyst", "role": "Analyst", "instructions": "Analyze."},
+	_, err := act.DoAny(context.Background(), TeamRequest{
+		Goal: "Only one role was declared.",
+		Agents: []RoleAgent{
+			{Name: "analyst", Role: "Analyst", Instructions: "Analyze."},
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "at least two role agents") {

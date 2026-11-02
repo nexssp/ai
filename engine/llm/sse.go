@@ -29,6 +29,28 @@ import (
 //     healthy stream.
 type SSEChunkDecoder func(data []byte) (text string, done bool, err error)
 
+type openAIStreamChunk struct {
+	Choices []openAIStreamChoice `json:"choices"`
+}
+
+type openAIStreamChoice struct {
+	Delta openAIStreamDelta `json:"delta"`
+}
+
+type openAIStreamDelta struct {
+	Content string `json:"content"`
+}
+
+type anthropicStreamEvent struct {
+	Type  string               `json:"type"`
+	Delta anthropicStreamDelta `json:"delta"`
+}
+
+type anthropicStreamDelta struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 // StreamSSE reads an SSE body line by line and calls decode on every
 // `data:` payload. The function owns the reader lifecycle: it closes body
 // on exit, checks ctx on every iteration, and stops on [DONE] or on the
@@ -95,13 +117,7 @@ func StreamSSE(ctx context.Context, body io.ReadCloser, decode SSEChunkDecoder) 
 // DecodeOpenAIChunk handles the OpenAI / DeepSeek / Groq / most
 // OpenAI-compatible SSE delta shape.
 func DecodeOpenAIChunk(data []byte) (text string, done bool, err error) {
-	var chunk struct {
-		Choices []struct {
-			Delta struct {
-				Content string `json:"content"`
-			} `json:"delta"`
-		} `json:"choices"`
-	}
+	var chunk openAIStreamChunk
 	if err := json.Unmarshal(data, &chunk); err != nil {
 		return "", false, err
 	}
@@ -115,13 +131,7 @@ func DecodeOpenAIChunk(data []byte) (text string, done bool, err error) {
 
 // DecodeAnthropicChunk handles content_block_delta and message_stop.
 func DecodeAnthropicChunk(data []byte) (text string, done bool, err error) {
-	var event struct {
-		Type  string `json:"type"`
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	}
+	var event anthropicStreamEvent
 	if err := json.Unmarshal(data, &event); err != nil {
 		return "", false, err
 	}
@@ -140,15 +150,7 @@ func DecodeAnthropicChunk(data []byte) (text string, done bool, err error) {
 // DecodeGeminiChunk handles the candidates/parts/text shape. Multiple parts
 // in a single frame are concatenated; the caller sees one fragment per frame.
 func DecodeGeminiChunk(data []byte) (text string, done bool, err error) {
-	var chunk struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
+	var chunk geminiWireResponse
 	if err := json.Unmarshal(data, &chunk); err != nil {
 		return "", false, err
 	}

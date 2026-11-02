@@ -1,73 +1,86 @@
 package llm
 
 import (
-	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/nexssp/kernel/xerr"
 )
 
 // FromHTTPStatus maps an upstream HTTP response into the kernel error
-// taxonomy. Body markers are inspected before falling through to the
-// status-based default, because OpenAI-compatible providers wrap
-// transient conditions inside 400 responses.
+// taxonomy. Only documented transient statuses or exact structured error
+// codes are retryable; arbitrary body text and malformed responses are not.
 func FromHTTPStatus(status int, body []byte, providerName string) error {
 	msg := fmt.Sprintf("%s: HTTP %d: %s", providerName, status, string(body))
+	code := upstreamErrorCode(body)
 
 	switch status {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
 		return nil
 	case http.StatusBadRequest:
-		// Some providers return 400 for conditions that are semantically
-		// transient — the caller should try a different provider/model.
-		if isTransientBody(body) {
-			return xerr.Unavailable(msg)
-		}
-
 		return xerr.BadRequest(msg)
 	case http.StatusUnauthorized:
 		return xerr.Unauthorized(msg)
 	case http.StatusForbidden:
+		return xerr.Forbidden(msg)
+	case http.StatusPaymentRequired:
 		return xerr.Forbidden(msg)
 	case http.StatusNotFound:
 		return xerr.NotFound(msg)
 	case http.StatusConflict:
 		return xerr.Conflict(msg)
 	case http.StatusTooManyRequests:
-		return xerr.TooManyRequests(msg)
+		switch code {
+		case "", "rate_limit_exceeded", "too_many_requests", "rate_limited":
+			return xerr.TooManyRequests(msg)
+		case "insufficient_quota", "quota_exceeded", "billing_not_active", "billing_hard_limit_reached", "credit_balance_too_low", "account_deactivated":
+			return xerr.Forbidden(msg)
+		default:
+			return xerr.Internal(msg)
+		}
 	case http.StatusRequestTimeout:
 		return xerr.Timeout(msg)
-	case http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusGatewayTimeout:
+	case http.StatusGatewayTimeout:
+		return xerr.Timeout(msg)
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
 		return xerr.Unavailable(msg)
 	default:
-		if status >= 500 {
-			return xerr.Unavailable(msg)
-		}
-
 		return xerr.Internal(msg)
 	}
 }
 
-// transientMarkers are body substrings that signal a transient condition
-// inside an otherwise non-transient HTTP status. Quote-delimited to avoid
-// matching inside unrelated JSON values.
-var transientMarkers = [][]byte{
-	[]byte(`"context_length_exceeded"`),
-	[]byte(`"overloaded"`),
-	[]byte(`"rate_limit_exceeded"`),
-	[]byte(`"server_error"`),
-	[]byte(`"temporarily_unavailable"`),
+// FromStreamHTTPStatus applies the provider classifier to stream startup
+// failures. A successful but non-200 response is still a terminal protocol
+// defect for a streaming endpoint, not a successful empty stream.
+func FromStreamHTTPStatus(status int, body []byte, providerName string) error {
+	if status >= 200 && status < 300 {
+		return xerr.Internal(fmt.Sprintf("%s: stream endpoint returned unexpected successful status %d", providerName, status))
+	}
+	return FromHTTPStatus(status, body, providerName)
 }
 
-func isTransientBody(body []byte) bool {
-	for _, m := range transientMarkers {
-		if bytes.Contains(body, m) {
-			return true
+type upstreamErrorEnvelope struct {
+	Code  string `json:"code"`
+	Type  string `json:"type"`
+	Error struct {
+		Code string `json:"code"`
+		Type string `json:"type"`
+	} `json:"error"`
+}
+
+func upstreamErrorCode(body []byte) string {
+	var payload upstreamErrorEnvelope
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	for _, value := range []string{payload.Error.Code, payload.Error.Type, payload.Code, payload.Type} {
+		if value = strings.ToLower(strings.TrimSpace(value)); value != "" {
+			return value
 		}
 	}
-
-	return false
+	return ""
 }
 
 func withErrorContext(message string, err error) error {

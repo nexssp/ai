@@ -32,10 +32,10 @@ func requireKind(t *testing.T, err error, want xerr.Kind) *xerr.AppError {
 	return app
 }
 
-func testAgents() []any {
-	return []any{
-		map[string]any{"name": "planner", "role": "planner", "instructions": "plan"},
-		map[string]any{"name": "reviewer", "role": "reviewer", "instructions": "review"},
+func testAgents() []RoleAgent {
+	return []RoleAgent{
+		{Name: "planner", Role: "planner", Instructions: "plan"},
+		{Name: "reviewer", Role: "reviewer", Instructions: "review"},
 	}
 }
 
@@ -69,9 +69,15 @@ func TestOptionsRejectUnknownRequireOption(t *testing.T) {
 
 func TestBundleInvalidTimeoutReachesBothActions(t *testing.T) {
 	bundle := Bundle(map[string]string{"timeout": "bad"})
-	for _, act := range bundle.Libraries[0].Actions {
-		req := map[string]any{"user": "hello", "goal": "hello", "agents": testAgents()}
-		_, err := act.DoAny(context.Background(), req)
+	requests := []struct {
+		act action.AnyAction
+		req any
+	}{
+		{act: bundle.Libraries[0].Actions[0], req: PromptRequest{User: "hello"}},
+		{act: bundle.Libraries[0].Actions[1], req: TeamRequest{Goal: "hello", Agents: testAgents()}},
+	}
+	for _, tc := range requests {
+		_, err := tc.act.DoAny(context.Background(), tc.req)
 		if ae := requireKind(t, err, xerr.KindValidation); !strings.Contains(ae.Message, "invalid timeout") {
 			t.Errorf("validation detail lost: %q", ae.Message)
 		}
@@ -84,7 +90,7 @@ func TestPromptValidatesUserBeforeBuildingProvider(t *testing.T) {
 		builds++
 		return &fakeProvider{}, nil
 	})
-	for _, req := range []map[string]any{{}, {"user": "  "}} {
+	for _, req := range []PromptRequest{{}, {User: "  "}} {
 		_, err := act.DoAny(context.Background(), req)
 		requireKind(t, err, xerr.KindValidation)
 	}
@@ -93,20 +99,18 @@ func TestPromptValidatesUserBeforeBuildingProvider(t *testing.T) {
 	}
 }
 
-func TestParseRoleAgentsValidationPaths(t *testing.T) {
+func TestNormalizeRoleAgentsValidationPaths(t *testing.T) {
 	cases := []struct {
-		name string
-		raw  any
+		name   string
+		agents []RoleAgent
 	}{
-		{"wrong container", "agents"},
-		{"too few", []any{map[string]any{"name": "a", "role": "r", "instructions": "i"}}},
-		{"invalid element", []any{42, map[string]any{"name": "b", "role": "r", "instructions": "i"}}},
-		{"missing fields", []any{map[string]any{}, map[string]any{"name": "b", "role": "r", "instructions": "i"}}},
-		{"duplicate name", []any{map[string]any{"name": "same", "role": "r", "instructions": "i"}, map[string]any{"name": "same", "role": "s", "instructions": "j"}}},
+		{"too few", []RoleAgent{{Name: "a", Role: "r", Instructions: "i"}}},
+		{"missing fields", []RoleAgent{{}, {Name: "b", Role: "r", Instructions: "i"}}},
+		{"duplicate name", []RoleAgent{{Name: "same", Role: "r", Instructions: "i"}, {Name: "same", Role: "s", Instructions: "j"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseRoleAgents(tc.raw)
+			_, err := normalizeRoleAgents(tc.agents)
 			requireKind(t, err, xerr.KindValidation)
 		})
 	}
@@ -118,7 +122,7 @@ func TestTeamRequiresGoalBeforeProvider(t *testing.T) {
 		builds++
 		return &fakeProvider{}, nil
 	})
-	_, err := act.DoAny(context.Background(), map[string]any{"agents": testAgents()})
+	_, err := act.DoAny(context.Background(), TeamRequest{Agents: testAgents()})
 	requireKind(t, err, xerr.KindValidation)
 	if builds != 0 {
 		t.Fatalf("provider builder called %d times without goal", builds)
@@ -144,11 +148,11 @@ func actionFor(t *testing.T, name string, builder providerBuilder) action.AnyAct
 	return newTeamActionWith(GlobalOptions{}, builder)
 }
 
-func requestFor(name string) map[string]any {
+func requestFor(name string) any {
 	if name == "ai.prompt" {
-		return map[string]any{"user": "hello"}
+		return PromptRequest{User: "hello"}
 	}
-	return map[string]any{"goal": "hello", "agents": testAgents()}
+	return TeamRequest{Goal: "hello", Agents: testAgents()}
 }
 
 func TestActionsRejectNilBuildersAndProviders(t *testing.T) {

@@ -1,0 +1,191 @@
+@description "Decision-router with explicit decision and candidate preflights, typed prompt attempts, and transient-only fallback"
+@require ../ as ai {
+    api_key_env: "AI_PROVIDER_API_KEY",
+    decision_api_key_env: "AI_DECISION_API_KEY",
+    timeout: "30s"
+}
+
+# The caller supplies decision_* fields, including decision_max_output_tokens,
+# and candidate_a/candidate_b fields. Each
+# candidate has {id, description, attempt:{candidate_id, attempt_id, provider,
+# model, base_url?, rate_card_id, expected_currency, prompt_tokens,
+# cached_prompt_tokens?, completion_tokens, user, system?, max_tokens?, ...}}.
+# Provider/model/card/currency/attempt identifiers are never defaulted here.
+
+@pipeline fallback_attempt
+    {
+        candidate_id: .attempt.CandidateID,
+        attempt_id: .attempt.AttemptID,
+        model: .attempt.Model,
+        rate_card_id: .attempt.RateCardID,
+        expected_currency: .attempt.ExpectedCurrency,
+        prompt_tokens: .attempt.PromptTokens,
+        cached_prompt_tokens: .attempt.CachedPromptTokens,
+        completion_tokens: .attempt.CompletionTokens,
+        prompt: {
+            candidate_id: .attempt.CandidateID,
+            attempt_id: .attempt.AttemptID,
+            provider: .attempt.Provider,
+            model: .attempt.Model,
+            rate_card_id: .attempt.RateCardID,
+            expected_currency: .attempt.ExpectedCurrency,
+            prompt_tokens: .attempt.PromptTokens,
+            cached_prompt_tokens: .attempt.CachedPromptTokens,
+            completion_tokens: .attempt.CompletionTokens,
+            base_url: .attempt.BaseURL,
+            user: .attempt.User,
+            system: .attempt.System,
+            max_tokens: .attempt.MaxTokens,
+            temperature: .attempt.Temperature,
+            json_mode: .attempt.JSONMode,
+            reasoning_effort: .attempt.ReasoningEffort
+        }
+    }
+    -> ai.cost.estimate
+    -> match {
+        result.Known == false -> const @{status: "fallback_preflight_rejected", candidate_id: result.CandidateID, attempt_id: result.AttemptID, issue: result.Issue, provider_called: false},
+        result.Known == true -> {
+            candidate_id: __root__.Prompt.CandidateID,
+            attempt_id: __root__.Prompt.AttemptID,
+            user: __root__.Prompt.User,
+            system: __root__.Prompt.System,
+            provider: __root__.Prompt.Provider,
+            model: __root__.Prompt.Model,
+            rate_card_id: __root__.Prompt.RateCardID,
+            expected_currency: __root__.Prompt.ExpectedCurrency,
+            prompt_tokens: __root__.Prompt.PromptTokens,
+            cached_prompt_tokens: __root__.Prompt.CachedPromptTokens,
+            completion_tokens: __root__.Prompt.CompletionTokens,
+            base_url: __root__.Prompt.BaseURL,
+            max_tokens: __root__.Prompt.MaxTokens,
+            temperature: __root__.Prompt.Temperature,
+            json_mode: __root__.Prompt.JSONMode,
+            reasoning_effort: __root__.Prompt.ReasoningEffort
+        } -> ai.prompt
+    }
+@end
+
+@pipeline primary_attempt
+    {
+        candidate_id: .primary.CandidateID,
+        attempt_id: .primary.AttemptID,
+        model: .primary.Model,
+        rate_card_id: .primary.RateCardID,
+        expected_currency: .primary.ExpectedCurrency,
+        prompt_tokens: .primary.PromptTokens,
+        cached_prompt_tokens: .primary.CachedPromptTokens,
+        completion_tokens: .primary.CompletionTokens,
+        prompt: {
+            candidate_id: .primary.CandidateID,
+            attempt_id: .primary.AttemptID,
+            provider: .primary.Provider,
+            model: .primary.Model,
+            rate_card_id: .primary.RateCardID,
+            expected_currency: .primary.ExpectedCurrency,
+            prompt_tokens: .primary.PromptTokens,
+            cached_prompt_tokens: .primary.CachedPromptTokens,
+            completion_tokens: .primary.CompletionTokens,
+            base_url: .primary.BaseURL,
+            user: .primary.User,
+            system: .primary.System,
+            max_tokens: .primary.MaxTokens,
+            temperature: .primary.Temperature,
+            json_mode: .primary.JSONMode,
+            reasoning_effort: .primary.ReasoningEffort,
+            fallback: .fallback
+        }
+    }
+    -> ai.cost.estimate
+    -> match {
+        result.Known == false -> const @{status: "primary_preflight_rejected", candidate_id: result.CandidateID, attempt_id: result.AttemptID, issue: result.Issue, fallback_invoked: false},
+        result.Known == true -> {
+            candidate_id: __root__.Prompt.CandidateID,
+            attempt_id: __root__.Prompt.AttemptID,
+            user: __root__.Prompt.User,
+            system: __root__.Prompt.System,
+            provider: __root__.Prompt.Provider,
+            model: __root__.Prompt.Model,
+            rate_card_id: __root__.Prompt.RateCardID,
+            expected_currency: __root__.Prompt.ExpectedCurrency,
+            prompt_tokens: __root__.Prompt.PromptTokens,
+            cached_prompt_tokens: __root__.Prompt.CachedPromptTokens,
+            completion_tokens: __root__.Prompt.CompletionTokens,
+            base_url: __root__.Prompt.BaseURL,
+            max_tokens: __root__.Prompt.MaxTokens,
+            temperature: __root__.Prompt.Temperature,
+            json_mode: __root__.Prompt.JSONMode,
+            reasoning_effort: __root__.Prompt.ReasoningEffort,
+            fallback: __root__.Prompt.Fallback
+        } -> ai.prompt ? on_error {
+            xerr.KindTimeout -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
+            xerr.KindUnavailable -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
+            xerr.KindCircuitBreaker -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
+            xerr.KindRateLimit -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
+            xerr.KindTooManyRequests -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
+            else -> error.reraise
+        }
+    }
+@end
+
+@pipeline decision_route
+    {
+        attempt_id: .decision_attempt_id,
+        model: .decision_model,
+        rate_card_id: .decision_rate_card_id,
+        expected_currency: .decision_expected_currency,
+        prompt_tokens: .decision_prompt_tokens,
+        cached_prompt_tokens: .decision_cached_prompt_tokens,
+        completion_tokens: .decision_max_output_tokens,
+        decision: {
+            attempt_id: .decision_attempt_id,
+            provider: .decision_provider,
+            model: .decision_model,
+            rate_card_id: .decision_rate_card_id,
+            expected_currency: .decision_expected_currency,
+            prompt_tokens: .decision_prompt_tokens,
+            cached_prompt_tokens: .decision_cached_prompt_tokens,
+            completion_tokens: .decision_max_output_tokens,
+            max_output_tokens: .decision_max_output_tokens,
+            base_url: .decision_base_url,
+            state: {task: .task, request: .request},
+            allowed_ids: [.candidate_a.id, .candidate_b.id],
+            questions: [{
+                id: "route",
+                type: "choice",
+                instructions: "Select exactly one configured candidate ID.",
+                criteria: [
+                    {id: .candidate_a.id, description: .candidate_a.description},
+                    {id: .candidate_b.id, description: .candidate_b.description}
+                ]
+            }],
+            candidates: [.candidate_a, .candidate_b]
+        }
+    }
+    -> ai.cost.estimate
+    -> match {
+        result.Known == false -> const @{status: "decision_preflight_rejected", attempt_id: result.AttemptID, issue: result.Issue, provider_called: false},
+        result.Known == true -> {
+            attempt_id: __root__.Decision.AttemptID,
+            provider: __root__.Decision.Provider,
+            model: __root__.Decision.Model,
+            rate_card_id: __root__.Decision.RateCardID,
+            expected_currency: __root__.Decision.ExpectedCurrency,
+            prompt_tokens: __root__.Decision.PromptTokens,
+            cached_prompt_tokens: __root__.Decision.CachedPromptTokens,
+            completion_tokens: __root__.Decision.CompletionTokens,
+            max_output_tokens: __root__.Decision.MaxOutputTokens,
+            base_url: __root__.Decision.BaseURL,
+            state: __root__.Decision.State,
+            questions: __root__.Decision.Questions,
+            allowed_ids: __root__.Decision.AllowedIDs,
+            candidates: __root__.Decision.Candidates
+        } -> ai.decide
+            -> match {
+                result.Answers[0].Choice == __root__.Candidates[0].ID -> {primary: __root__.Candidates[0].Attempt, fallback: __root__.Candidates[1].Attempt} -> pipeline.primary_attempt,
+                result.Answers[0].Choice == __root__.Candidates[1].ID -> {primary: __root__.Candidates[1].Attempt, fallback: __root__.Candidates[0].Attempt} -> pipeline.primary_attempt,
+                _ -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
+            }
+    }
+@end
+
+pipeline.decision_route

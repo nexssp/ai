@@ -23,12 +23,17 @@ type FallbackConfig struct {
 }
 
 func (c FallbackConfig) normalize() FallbackConfig {
-	if c.ShouldFallback == nil {
-		c.ShouldFallback = func(err error) bool {
-			kind := xerr.KindFrom(err)
-
-			return kind == xerr.KindUnavailable || kind == xerr.KindTooManyRequests || kind == xerr.KindRateLimit
+	policy := c.ShouldFallback
+	c.ShouldFallback = func(err error) bool {
+		switch xerr.KindFrom(err) {
+		case xerr.KindUnavailable, xerr.KindTooManyRequests, xerr.KindRateLimit, xerr.KindTimeout, xerr.KindCircuitBreaker:
+		case xerr.KindBadRequest, xerr.KindUnauthorized, xerr.KindForbidden,
+			xerr.KindNotFound, xerr.KindConflict, xerr.KindValidation,
+			xerr.KindInternal, xerr.KindMethodNotAllowed, xerr.KindCanceled,
+			xerr.KindDatabase, xerr.KindShutdown:
+			return false
 		}
+		return policy == nil || policy(err)
 	}
 
 	if c.Transform == nil {
@@ -88,13 +93,13 @@ func (p *FallbackProvider) Complete(ctx context.Context, req Request) (Response,
 			FallbackRequest: fallbackReq,
 			PrimaryError:    primaryErr,
 		}); err != nil {
-			return Response{}, withErrorContext("llm: fallback callback failed", err)
+			return Response{}, fallbackGateError(err)
 		}
 	}
 
 	fallbackRes, fallbackErr := p.secondary.Complete(ctx, fallbackReq)
 	if fallbackErr != nil {
-		return fallbackRes, xerr.Unavailable("llm: provider fallback failed", &FallbackError{Primary: primaryErr, Secondary: fallbackErr})
+		return fallbackRes, fallbackFailureError(primaryErr, fallbackErr)
 	}
 
 	return fallbackRes, nil
@@ -121,13 +126,28 @@ func (p *FallbackProvider) Stream(ctx context.Context, req Request) (iter.Seq2[s
 			FallbackRequest: fallbackReq,
 			PrimaryError:    primaryErr,
 		}); err != nil {
-			return nil, withErrorContext("llm: fallback callback failed", err)
+			return nil, fallbackGateError(err)
 		}
 	}
 
 	stream, fallbackErr := p.secondary.Stream(ctx, fallbackReq)
 	if fallbackErr != nil {
-		return nil, xerr.Unavailable("llm: provider fallback failed", &FallbackError{Primary: primaryErr, Secondary: fallbackErr})
+		return nil, fallbackFailureError(primaryErr, fallbackErr)
 	}
 	return stream, nil
+}
+
+func fallbackGateError(err error) error {
+	appError := *xerr.From(err)
+	appError.Kind = xerr.KindValidation
+	appError.Message = "llm: fallback callback/preflight failed: " + appError.Message
+	appError.Cause = err
+	return &appError
+}
+
+func fallbackFailureError(primaryErr, fallbackErr error) error {
+	appError := *xerr.From(fallbackErr)
+	appError.Message = "llm: provider fallback failed: " + appError.Message
+	appError.Cause = &FallbackError{Primary: primaryErr, Secondary: fallbackErr}
+	return &appError
 }

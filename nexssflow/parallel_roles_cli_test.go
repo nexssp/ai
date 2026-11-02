@@ -157,7 +157,7 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 		t.Fatalf("read workflow: %v", err)
 	}
 	text := string(source)
-	oldModel := `model: "gpt-4o-mini",`
+	oldModel := `model: "your-model-id",`
 	newModel := `model: "local-fake-model",` + "\n" + `    base_url: "` + server.URL + `/v1",`
 	if strings.Count(text, oldModel) != 1 {
 		t.Fatalf("workflow must contain exactly one %q setting", oldModel)

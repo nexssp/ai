@@ -50,14 +50,52 @@ type FunctionSpec struct {
 	Example     any    `json:"example,omitempty"`
 }
 
+// ReasoningEffort is a provider/model-specific reasoning budget. Not all
+// providers accept every value; unsupported values are passed to the API and
+// reported using its normal typed provider error.
+type ReasoningEffort string
+
+const (
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+	ReasoningEffortMax     ReasoningEffort = "max"
+	ReasoningEffortInstant ReasoningEffort = "instant"
+)
+
+// JSONSchema is the typed subset of JSON Schema used for provider-constrained
+// structured outputs. Provider adapters translate it to their native API shape.
+type JSONSchema struct {
+	Type                 string                `json:"type"`
+	Properties           map[string]JSONSchema `json:"properties,omitempty"`
+	Required             []string              `json:"required,omitempty"`
+	Items                *JSONSchema           `json:"items,omitempty"`
+	Enum                 []string              `json:"enum,omitempty"`
+	AdditionalProperties *bool                 `json:"additionalProperties,omitempty"`
+}
+
 type Request struct {
-	Model           string     `json:"model,omitempty"`
-	Messages        []Message  `json:"messages"`
-	Temperature     float64    `json:"temperature,omitempty"`
-	MaxTokens       int        `json:"max_tokens,omitempty"`
-	JSONMode        bool       `json:"json_mode,omitempty"`
-	Tools           []ToolSpec `json:"tools,omitempty"`
-	IncludeThinking bool       `json:"include_thinking,omitempty"`
+	Model string `json:"model,omitempty"`
+	// The following fields are host accounting metadata. Provider adapters build
+	// their own wire DTOs and must not send these fields to upstream APIs.
+	CandidateID                 string          `json:"candidate_id,omitempty"`
+	AttemptID                   string          `json:"attempt_id,omitempty"`
+	RateCardID                  string          `json:"rate_card_id,omitempty"`
+	ExpectedCurrency            *cost.Currency  `json:"expected_currency,omitempty"`
+	EstimatedPromptTokens       int             `json:"estimated_prompt_tokens,omitempty"`
+	EstimatedCachedPromptTokens int             `json:"estimated_cached_prompt_tokens,omitempty"`
+	EstimatedCompletionTokens   int             `json:"estimated_completion_tokens,omitempty"`
+	Messages                    []Message       `json:"messages"`
+	Temperature                 float64         `json:"temperature,omitempty"`
+	MaxTokens                   int             `json:"max_tokens,omitempty"`
+	JSONMode                    bool            `json:"json_mode,omitempty"`
+	OutputSchema                *JSONSchema     `json:"output_schema,omitempty"` // Optional schema constraint; currently applied by Anthropic Messages.
+	ReasoningEffort             ReasoningEffort `json:"reasoning_effort,omitempty"`
+	Tools                       []ToolSpec      `json:"tools,omitempty"`
+	IncludeThinking             bool            `json:"include_thinking,omitempty"`
 }
 
 type Response struct {
@@ -79,9 +117,8 @@ func (r Response) Truncated() bool {
 	return r.FinishReason == "length"
 }
 
-// CostMicros returns the cost of this turn in microdollars-equivalent
-// units of the currency reported by the rate card. The currency itself
-// is available via Cost() when needed.
+// CostMicros returns the cost of this turn in micro-units of the currency
+// reported by the rate card. The currency itself is available via Cost().
 func (r Response) CostMicros() cost.Micro {
 	m, _, ok := CalculateCost(
 		r.Model,

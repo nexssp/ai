@@ -62,12 +62,14 @@ func TestPromptActionUsesConfiguredProviderAndSendsExpectedRequest(t *testing.T)
 		Provider:     "openai",
 		BaseURL:      server.URL + "/custom/v1/",
 	})
-	got, err := act.DoAny(context.Background(), map[string]any{
-		"job_id":      "keep-me",
-		"system":      "Be concise.",
-		"user":        "What is 2+2?",
-		"max_tokens":  32,
-		"temperature": 0.25,
+	got, err := act.DoAny(context.Background(), PromptRequest{
+		CandidateID: "candidate-a",
+		AttemptID:   "attempt-1",
+		Context:     json.RawMessage(`{"job":"keep-explicit"}`),
+		System:      "Be concise.",
+		User:        "What is 2+2?",
+		MaxTokens:   32,
+		Temperature: 0.25,
 	})
 	if err != nil {
 		t.Fatalf("prompt action: %v", err)
@@ -98,12 +100,11 @@ func TestPromptActionUsesConfiguredProviderAndSendsExpectedRequest(t *testing.T)
 		t.Errorf("request sampling settings = max_tokens:%d temperature:%v, want 32 and 0.25", observed.body.MaxTokens, observed.body.Temperature)
 	}
 
-	out, ok := got.(map[string]any)
+	out, ok := got.(PromptResult)
 	if !ok {
-		t.Fatalf("action output type = %T, want map[string]any", got)
+		t.Fatalf("action output type = %T, want PromptResult", got)
 	}
-	if out["content"] != "local fake answer" || out["model"] != "served-model" ||
-		out["job_id"] != "keep-me" || out["prompt_tokens"] != 4 || out["comp_tokens"] != 2 || out["total_tokens"] != 6 {
-		t.Errorf("action output = %#v, want provider response merged with input state", out)
+	if out.Content != "local fake answer" || out.Model != "served-model" || out.CandidateID != "candidate-a" || out.AttemptID != "attempt-1" || out.PromptTokens != 4 || out.CompTokens != 2 || out.TotalTokens != 6 || string(out.Context) != `{"job":"keep-explicit"}` {
+		t.Errorf("action output = %+v, want typed provider result and explicitly carried context", out)
 	}
 }

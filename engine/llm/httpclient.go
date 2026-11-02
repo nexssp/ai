@@ -9,8 +9,11 @@ package llm
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/transport/codec"
@@ -60,13 +63,13 @@ func DoJSON[Res any](ctx context.Context, r HTTPRequest) (Res, error) {
 
 	resp, err := r.Client.Do(httpReq)
 	if err != nil {
-		return zero, xerr.MapTransportError(err)
+		return zero, mapProviderTransportError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return zero, xerr.MapTransportError(err)
+		return zero, mapProviderTransportError(err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -75,8 +78,47 @@ func DoJSON[Res any](ctx context.Context, r HTTPRequest) (Res, error) {
 
 	var out Res
 	if err := r.Codec.Unmarshal(respBytes, &out); err != nil {
-		return zero, xerr.Unavailable("llm: invalid provider response", err)
+		return zero, xerr.Internal("llm: invalid provider response", err)
 	}
 
 	return out, nil
+}
+
+func mapProviderTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	cause := err
+	for {
+		urlErr, ok := errors.AsType[*url.Error](cause)
+		if !ok {
+			break
+		}
+		cause = urlErr.Err
+	}
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return xerr.Timeout("llm: provider transport timed out", err)
+	}
+	if errors.Is(cause, context.Canceled) {
+		return xerr.Canceled("llm: provider transport was canceled", err)
+	}
+	if dnsErr, ok := errors.AsType[*net.DNSError](cause); ok {
+		if dnsErr.IsTimeout {
+			return xerr.Timeout("llm: provider DNS lookup timed out", err)
+		}
+		if dnsErr.IsTemporary {
+			return xerr.Unavailable("llm: temporary provider DNS failure", err)
+		}
+		return xerr.Internal("llm: permanent provider DNS failure", err)
+	}
+	if netErr, ok := errors.AsType[net.Error](cause); ok {
+		if netErr.Timeout() {
+			return xerr.Timeout("llm: provider network timed out", err)
+		}
+		return xerr.Unavailable("llm: provider network failure", err)
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return xerr.Unavailable("llm: provider connection ended unexpectedly", err)
+	}
+	return xerr.Internal("llm: unclassified provider transport failure", err)
 }

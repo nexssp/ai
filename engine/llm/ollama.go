@@ -28,6 +28,19 @@ type OllamaProvider struct {
 	execAction *action.BuiltAction[Request, Response]
 }
 
+type ollamaChatPayload struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	Stream    bool      `json:"stream"`
+	KeepAlive string    `json:"keep_alive"`
+	Format    string    `json:"format,omitempty"`
+}
+
+type ollamaLifecyclePayload struct {
+	Model     string `json:"model"`
+	KeepAlive int    `json:"keep_alive"`
+}
+
 // ollamaWireResponse is the JSON shape of the /api/chat response.
 type ollamaWireResponse struct {
 	Model   string  `json:"model"`
@@ -36,13 +49,26 @@ type ollamaWireResponse struct {
 	Eval    int     `json:"eval_count"`
 }
 
+type ollamaStreamChunk struct {
+	Message ollamaStreamMessage `json:"message"`
+	Done    bool                `json:"done"`
+}
+
+type ollamaStreamMessage struct {
+	Content string `json:"content"`
+}
+
+type ollamaRunningModelsResponse struct {
+	Models []ollamaRunningModel `json:"models"`
+}
+
+type ollamaRunningModel struct {
+	Name string `json:"name"`
+}
+
 func NewOllama(cfg Config) *OllamaProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "http://localhost:11434"
-	}
-
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = defaultOllamaModel
 	}
 
 	timeout := cfg.Timeout
@@ -67,15 +93,13 @@ func NewOllama(cfg Config) *OllamaProvider {
 		if req.Model == "" {
 			req.Model = p.cfg.DefaultModel
 		}
-
-		payload := map[string]any{
-			jsonKeyModel:     req.Model,
-			jsonKeyMessages:  req.Messages,
-			"stream":         false,
-			jsonKeyKeepAlive: keepAlive24h,
+		if req.Model == "" {
+			return Response{}, xerr.Validation("ollama: model is required in the request or provider configuration")
 		}
+
+		payload := ollamaChatPayload{Model: req.Model, Messages: req.Messages, KeepAlive: keepAlive24h}
 		if req.JSONMode {
-			payload["format"] = "json"
+			payload.Format = "json"
 		}
 
 		headers := map[string]string{}
@@ -120,6 +144,9 @@ func (p *OllamaProvider) Name() string {
 }
 
 func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, error) {
+	if req.Model == "" && p.cfg.DefaultModel == "" {
+		return Response{}, xerr.Validation("ollama: model is required in the request or provider configuration")
+	}
 	return p.execAction.Do(ctx, req)
 }
 
@@ -130,13 +157,11 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
 	}
-
-	payload := map[string]any{
-		jsonKeyModel:     req.Model,
-		jsonKeyMessages:  req.Messages,
-		"stream":         true,
-		jsonKeyKeepAlive: keepAlive24h,
+	if req.Model == "" {
+		return nil, xerr.Validation("ollama: model is required in the request or provider configuration")
 	}
+
+	payload := ollamaChatPayload{Model: req.Model, Messages: req.Messages, Stream: true, KeepAlive: keepAlive24h}
 
 	bodyBytes, err := p.codec.Marshal(payload)
 	if err != nil {
@@ -158,16 +183,16 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, xerr.Unavailable("ollama: stream request failed", err)
+		return nil, mapProviderTransportError(err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if readErr != nil {
-			return nil, xerr.Unavailable("ollama: read stream error response", readErr)
+			return nil, mapProviderTransportError(readErr)
 		}
-		return nil, xerr.Unavailable(fmt.Sprintf("ollama: stream returned status %d: %s", resp.StatusCode, string(respBytes)))
+		return nil, FromStreamHTTPStatus(resp.StatusCode, respBytes, p.Name())
 	}
 
 	return streamOllamaJSONL(ctx, resp.Body), nil
@@ -202,12 +227,7 @@ func streamOllamaJSONL(ctx context.Context, body io.ReadCloser) iter.Seq2[string
 				continue
 			}
 
-			var chunk struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-				Done bool `json:"done"`
-			}
+			var chunk ollamaStreamChunk
 			if err := json.Unmarshal(trimmed, &chunk); err != nil {
 				continue
 			}
@@ -229,11 +249,11 @@ func (p *OllamaProvider) Preload(ctx context.Context, model string) error {
 	if model == "" {
 		model = p.cfg.DefaultModel
 	}
-
-	payload := map[string]any{
-		"model":      model,
-		"keep_alive": -1,
+	if model == "" {
+		return xerr.Validation("ollama: model is required for preload")
 	}
+
+	payload := ollamaLifecyclePayload{Model: model, KeepAlive: -1}
 
 	bodyBytes, err := p.codec.Marshal(payload)
 	if err != nil {
@@ -271,11 +291,11 @@ func (p *OllamaProvider) Unload(ctx context.Context, model string) error {
 	if model == "" {
 		model = p.cfg.DefaultModel
 	}
-
-	payload := map[string]any{
-		"model":      model,
-		"keep_alive": 0,
+	if model == "" {
+		return xerr.Validation("ollama: model is required for unload")
 	}
+
+	payload := ollamaLifecyclePayload{Model: model, KeepAlive: 0}
 
 	bodyBytes, err := p.codec.Marshal(payload)
 	if err != nil {
@@ -314,11 +334,7 @@ func (p *OllamaProvider) IsLoaded(ctx context.Context, model string) bool {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	var psRes struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
+	var psRes ollamaRunningModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&psRes); err != nil {
 		return false
 	}

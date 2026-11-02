@@ -102,20 +102,24 @@ func TestCriticWorkflowRunsThroughFlowWithLocalFakeProvider(t *testing.T) {
 		t.Fatalf("execute critic workflow: %v", err)
 	}
 	runNFlowAssertions(t, execution)
-	out, ok := execution.Output.(map[string]any)
+	out, ok := execution.Output.(PromptResult)
 	if !ok {
-		t.Fatalf("workflow output type = %T, want map[string]any", execution.Output)
+		t.Fatalf("workflow output type = %T, want PromptResult", execution.Output)
 	}
-	if out["content"] != answer || out["goal"] != goal || out["output"] != proposed || out["model"] != "local-fake-model" {
-		t.Fatalf("unexpected workflow output: %#v", out)
+	if out.Content != answer || out.Model != "local-fake-model" {
+		t.Fatalf("unexpected workflow output: %+v", out)
 	}
-	if out["prompt_tokens"] != 11 || out["comp_tokens"] != 7 || out["total_tokens"] != 18 {
-		t.Fatalf("unexpected token counts in workflow output: %#v", out)
+	if out.PromptTokens != 11 || out.CompTokens != 7 || out.TotalTokens != 18 {
+		t.Fatalf("unexpected token counts in workflow output: %+v", out)
+	}
+	var reviewContext map[string]string
+	if err := json.Unmarshal(out.Context, &reviewContext); err != nil || reviewContext["goal"] != goal || reviewContext["output"] != proposed {
+		t.Fatalf("typed context = %s, decode error = %v", out.Context, err)
 	}
 
 	select {
 	case req := <-requests:
-		if req.Model != "gpt-4o-mini" || req.MaxTokens != 1024 || req.Temperature != 0.1 || req.ResponseFormat.Type != "json_object" {
+		if req.Model != "your-model-id" || req.MaxTokens != 1024 || req.Temperature != 0.1 || req.ResponseFormat.Type != "json_object" {
 			t.Errorf("provider parameters = %+v, want critic model, sampling settings, and JSON-object mode", req)
 		}
 		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || !strings.Contains(req.Messages[0].Content, "untrusted review data") ||
@@ -164,7 +168,7 @@ func TestRequiredBundleImportsEmbeddedCriticAlongsideGoAction(t *testing.T) {
 	workflowPath := "bundle-source-critic-test.nflow"
 	source := `@require ../ as ai {
     provider: "openai",
-    model: "gpt-4o-mini",
+    model: "your-model-id",
     api_key_env: "SI_AI_BUNDLE_SOURCE_TEST_KEY",
     base_url: "` + server.URL + `",
     timeout: "10s"
@@ -236,9 +240,13 @@ func TestRequiredBundleImportsEmbeddedCriticAlongsideGoAction(t *testing.T) {
 	if err != nil || len(resolvedRequirements) != 1 || resolvedRequirements[0].Alias != "ai" {
 		t.Fatalf("compiled requirements = %+v, %v; want the ai alias", resolvedRequirements, err)
 	}
-	output, ok := execution.Output.(map[string]any)
-	if !ok || output["content"] != answer || output["goal"] != goal || output["output"] != proposed || output["model"] != "local-bundle-source-fake" {
-		t.Fatalf("critic output = %#v, want fake response and preserved input", execution.Output)
+	output, ok := execution.Output.(PromptResult)
+	if !ok || output.Content != answer || output.Model != "local-bundle-source-fake" {
+		t.Fatalf("critic output = %#v, want typed fake response", execution.Output)
+	}
+	var outputContext map[string]string
+	if err := json.Unmarshal(output.Context, &outputContext); err != nil || outputContext["goal"] != goal || outputContext["output"] != proposed {
+		t.Fatalf("critic context = %s, decode error = %v", output.Context, err)
 	}
 	select {
 	case <-requests:

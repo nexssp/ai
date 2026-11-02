@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/transport/codec"
 )
 
@@ -19,16 +20,65 @@ var discoveryClient = &http.Client{
 	},
 }
 
-// FetchModels queries an upstream provider for its active model catalog.
+type namedModelCatalogWire struct {
+	Models []modelNameWire `json:"models"`
+}
+
+type modelNameWire struct {
+	Name string `json:"name"`
+}
+
+type openAIModelCatalogWire struct {
+	Data []modelIDWire `json:"data"`
+}
+
+type modelIDWire struct {
+	ID string `json:"id"`
+}
+
+// FetchModels queries an upstream provider for its active model catalog. It
+// returns no fabricated model IDs when the provider catalog is unavailable.
 func FetchModels(ctx context.Context, providerType, apiKey, baseURL string) ([]string, error) {
 	switch strings.ToLower(providerType) {
 	case providerOllama, "ollama_cloud":
 		return fetchOllamaModels(ctx, apiKey, baseURL)
-	case providerOpenAI, "groq", providerNVIDIA, "nim", providerDeepSeek, providerOpenRouter, providerGemini, providerLMStudio, "local", "vllm", "vast":
+	case "typesafe":
+		return fetchTypeSafeModels(ctx, apiKey, baseURL)
+	case providerOpenAI, "groq", providerNVIDIA, "nim", providerDeepSeek, providerOpenRouter, providerGemini, providerLMStudio, "local", "vllm", "vast", providerXAI, providerInception:
 		return fetchOpenAIModels(ctx, providerType, apiKey, baseURL)
 	default:
-		return getFallbackModels(providerType), nil
+		return nil, xerr.BadRequest("llm: model discovery does not support provider " + providerType)
 	}
+}
+
+func fetchTypeSafeModels(ctx context.Context, apiKey, baseURL string) ([]string, error) {
+	url := typeSafeModelsURL(baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, xerr.Internal("llm: build TypeSafe model discovery request", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := discoveryClient.Do(req)
+	if err != nil {
+		return nil, xerr.MapTransportError(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, FromHTTPStatus(resp.StatusCode, nil, "typesafe")
+	}
+	var catalog namedModelCatalogWire
+	if err := codec.Default.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		return nil, xerr.Unavailable("llm: invalid TypeSafe model catalog", err)
+	}
+	models := make([]string, 0, len(catalog.Models))
+	for _, model := range catalog.Models {
+		if model.Name != "" {
+			models = append(models, model.Name)
+		}
+	}
+	return models, nil
 }
 
 func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, error) {
@@ -36,7 +86,7 @@ func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, e
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return getFallbackModels(providerOllama), err
+		return nil, xerr.Internal("llm: build Ollama model discovery request", err)
 	}
 
 	if apiKey != "" {
@@ -44,31 +94,26 @@ func fetchOllamaModels(ctx context.Context, apiKey, baseURL string) ([]string, e
 	}
 
 	resp, err := discoveryClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-
-		return getFallbackModels(providerOllama), nil
+	if err != nil {
+		return nil, xerr.MapTransportError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	var res struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
+	if resp.StatusCode != http.StatusOK {
+		return nil, FromHTTPStatus(resp.StatusCode, nil, providerOllama)
 	}
 
-	if err := codec.Default.NewDecoder(resp.Body).Decode(&res); err == nil && len(res.Models) > 0 {
-		list := make([]string, len(res.Models))
-		for i, m := range res.Models {
-			list[i] = m.Name
+	var res namedModelCatalogWire
+	if err := codec.Default.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, xerr.Unavailable("llm: invalid Ollama model catalog", err)
+	}
+
+	list := make([]string, 0, len(res.Models))
+	for _, model := range res.Models {
+		if model.Name != "" {
+			list = append(list, model.Name)
 		}
-
-		return list, nil
 	}
-
-	return getFallbackModels(providerOllama), nil
+	return list, nil
 }
 
 func fetchOpenAIModels(ctx context.Context, pType, apiKey, baseURL string) ([]string, error) {
@@ -76,7 +121,7 @@ func fetchOpenAIModels(ctx context.Context, pType, apiKey, baseURL string) ([]st
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return getFallbackModels(pType), err
+		return nil, xerr.Internal("llm: build model discovery request", err)
 	}
 
 	if apiKey != "" {
@@ -84,31 +129,26 @@ func fetchOpenAIModels(ctx context.Context, pType, apiKey, baseURL string) ([]st
 	}
 
 	resp, err := discoveryClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-
-		return getFallbackModels(pType), nil
+	if err != nil {
+		return nil, xerr.MapTransportError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-
-	var res struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	if resp.StatusCode != http.StatusOK {
+		return nil, FromHTTPStatus(resp.StatusCode, nil, pType)
 	}
 
-	if err := codec.Default.NewDecoder(resp.Body).Decode(&res); err == nil && len(res.Data) > 0 {
-		list := make([]string, len(res.Data))
-		for i, m := range res.Data {
-			list[i] = m.ID
+	var res openAIModelCatalogWire
+	if err := codec.Default.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, xerr.Unavailable("llm: invalid model catalog", err)
+	}
+
+	list := make([]string, 0, len(res.Data))
+	for _, model := range res.Data {
+		if model.ID != "" {
+			list = append(list, model.ID)
 		}
-
-		return list, nil
 	}
-
-	return getFallbackModels(pType), nil
+	return list, nil
 }
 
 func resolveOllamaURL(baseURL string) string {
@@ -153,28 +193,11 @@ func resolveProviderURL(providerType, baseURL string) string {
 		return "http://127.0.0.1:1234/v1/models"
 	case "vllm", "vast":
 		return "http://localhost:8000/v1/models"
+	case providerXAI:
+		return "https://api.x.ai/v1/models"
+	case providerInception:
+		return "https://api.inceptionlabs.ai/v1/models"
 	default:
 		return "https://api.openai.com/v1/models"
-	}
-}
-
-func getFallbackModels(providerType string) []string {
-	switch strings.ToLower(providerType) {
-	case "groq":
-		return []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"}
-	case providerNVIDIA, "nim":
-		return []string{"meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct", "deepseek-ai/deepseek-r1"}
-	case providerOllama:
-		return []string{defaultOllamaModel, "mistral:latest", "llama3.2:3b"}
-	case providerDeepSeek:
-		return []string{"deepseek-chat", "deepseek-reasoner"}
-	case providerOpenRouter:
-		return []string{"meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen-2.5-coder-32b-instruct"}
-	case providerGemini:
-		return []string{"gemini-2.0-flash", "gemini-1.5-pro"}
-	case providerLMStudio, "local", "vllm", "vast":
-		return []string{"google/gemma-2-9b", defaultOllamaModel}
-	default:
-		return []string{"gpt-4o-mini", "gpt-4o"}
 	}
 }
