@@ -115,6 +115,8 @@ func newTeamActionWith(global GlobalOptions, build providerBuilder) action.AnyAc
 			}
 			response, err := provider.Complete(ctx, llm.Request{
 				Model:           model,
+				CandidateID:     firstNonEmpty(agent.CandidateID, req.CandidateID),
+				AttemptID:       firstNonEmpty(agent.AttemptID, req.AttemptID),
 				Messages:        messages,
 				MaxTokens:       req.MaxTokens,
 				Temperature:     req.Temperature,

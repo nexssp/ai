@@ -159,3 +159,35 @@ func TestTeamRequiresAtLeastTwoRoleAgentsBeforeProviderAccess(t *testing.T) {
 		t.Fatalf("provider was built %d times for an invalid team, want zero", providerBuilds)
 	}
 }
+
+func TestTeamForwardsCandidateAndAttemptIDsToEachProvider(t *testing.T) {
+	providers := []*fakeProvider{{}, {}}
+	buildCalls := 0
+	act := newTeamActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+		provider := providers[buildCalls]
+		buildCalls++
+		return provider, nil
+	})
+
+	_, err := act.DoAny(context.Background(), TeamRequest{
+		Goal:        "Review the design.",
+		CandidateID: "team-candidate",
+		AttemptID:   "team-attempt",
+		Agents: []RoleAgent{
+			{Name: "analyst", Role: "Analyst", Instructions: "Analyze.", CandidateID: "role-candidate", AttemptID: "role-attempt"},
+			{Name: "reviewer", Role: "Reviewer", Instructions: "Review."},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buildCalls != 2 {
+		t.Fatalf("provider builder calls = %d, want 2", buildCalls)
+	}
+	if providers[0].request.CandidateID != "role-candidate" || providers[0].request.AttemptID != "role-attempt" {
+		t.Fatalf("first role request IDs = %q/%q, want role IDs", providers[0].request.CandidateID, providers[0].request.AttemptID)
+	}
+	if providers[1].request.CandidateID != "team-candidate" || providers[1].request.AttemptID != "team-attempt" {
+		t.Fatalf("second role request IDs = %q/%q, want team defaults", providers[1].request.CandidateID, providers[1].request.AttemptID)
+	}
+}

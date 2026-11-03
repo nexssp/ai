@@ -62,7 +62,9 @@ A request can override its model and include messages, temperature, maximum toke
 | Package | What it provides |
 | --- | --- |
 | [`engine/llm`](engine/llm) | Provider interfaces and implementations, chat and streaming requests, model discovery, provider chains and routing helpers, structured decision DTOs, and externally configured cost estimates. |
-| [`nexssflow`](nexssflow) | A Nexss Flow v0.65.0+ bundle named `ai` with typed `ai.prompt`, `ai.team`, `ai.decide`, and `ai.cost.estimate` actions, plus embedded workflows. |
+| [`gateway`](gateway) | An application-composable provider gateway with per-request route selection, pre-dispatch gates, and content-free outcome hooks. |
+| [`retrieval`](retrieval) | Namespace-scoped vector indexing/search and source-grounded RAG over an injected embedder and vector-index adapter. See the [retrieval guide](retrieval/README.md). |
+| [`nexssflow`](nexssflow) | A Nexss Flow v0.67.1+ bundle named `ai` with typed prompt/team/decision/cost/retrieval/RAG actions, a host-injected retrieval service, and [schema-backed examples](nflows/retrieval_rag.nflow). |
 | [`memory`](memory) | A host-side hybrid conversation-memory service with bounded Redis working history and application-supplied long-term memory and LLM adapters. See the [memory guide](memory/README.md). |
 | [`extensions/ai_assist`](extensions/ai_assist) | An experimental placeholder bundle. Its asynchronous error-analysis hook is currently a TODO; it does not provide working model analysis yet. |
 
@@ -129,7 +131,7 @@ Each action has a Go request struct and a typed result. `ai.prompt` accepts a no
 
 `ai.team` runs two or more declared role turns **in order** during one Flow invocation. Each role needs a unique `name`, a `role`, and `instructions`; it may override provider, model, base URL, and reasoning effort. Every role sees the original goal and earlier role answers. `TeamResult` includes the goal, typed role turns, transcript, final content/model, aggregate token counts, and per-turn usage. Cost is left per turn because roles may use different currencies or rate cards. This is temporary in-run orchestration, not a persistent agent, session, or memory store.
 
-`ai.decide` requires a separately configured provider and model plus a positive `max_output_tokens` value. Its optional pricing metadata stays separate from model identity and is echoed with the attempt ID. Its `allowed_ids` constrain choice criteria and answers to the supplied candidate IDs; the action validates the choice, but it does not own the application's routing graph, budget policy, selector authorization/reservation, or fallback. Keep those controls in the application host guard and caller's NFlow graph. The runnable [`decision_route.nflow`](nflows/decision_route.nflow) shows `ai.decide` followed by a Flow `match` over the typed answer, with a final manual-review branch. Flow expressions access Go structs by exported field names, so the example reads `result.Answers[0].Choice`.
+`ai.decide` requires a separately configured provider and model plus a positive `max_output_tokens` value. Its optional pricing metadata stays separate from model identity and is echoed with the attempt ID. Its `allowed_ids` constrain choice criteria and answers to the supplied candidate IDs; the action validates the choice, but it does not own the application's routing graph, budget policy, selector authorization/reservation, or fallback. Keep those controls in the application host guard and caller's NFlow graph. The runnable [`decision_route.nflow`](nflows/decision_route.nflow) uses `ai.nflow.view` only after typed action results, then branches on `decision_result.answers[0].choice`. NFlow `@schema` identifiers and input maps are declared directly in snake_case and need no `json` tags; the view is only for typed Go outputs.
 
 A decision request uses typed question definitions. For example, the workflow fixture supplies `state`, `allowed_ids`, and a `choice` question with an explicit candidate description for each ID. `ai.decide` returns the model, typed answers, probabilities/spans where supplied, and per-call usage. For a nested decision, `ai.cost.estimate` requires the completion-token basis to equal `max_output_tokens`; missing, invalid, or mismatched caps are rejected. It includes the configured currency only when the exact rate card matches and remains a calculation, not a billing or reservation gate.
 
@@ -149,6 +151,10 @@ The critic sends the goal and proposed output as explicit prompt context and ask
 ## Conversation memory
 
 The `memory` package is a host-side service, not a `.nflow` bundle. It combines recent scoped turns from a `WorkingStore` with optional relevant results from a `LongTermStore`, constructs the prompt, and calls an injected `Completer`. Redis is the included working-history backend; applications provide their own semantic-memory adapter and LLM completer. Importance-based promotion uses a simple keyword scorer by default, which can be replaced with an application-specific scorer. There is no built-in LEANN adapter, scheduler, or active-scope discovery. See [`memory/README.md`](memory/README.md) for setup, request flow, promotion, and failure handling.
+
+## Vector retrieval and RAG
+
+The `retrieval` package adds deterministic character-based chunking, batched embedding, namespace-scoped vector search, document replacement/deletion, and a basic RAG answer flow using any `llm.Provider` or the AI gateway. `retrieval.VectorIndex` is an AI-owned adapter boundary; generic persistence stays in `nexssp/storage`. The included `MemoryIndex` is for tests and local demos only—there is no persistent vector database adapter, reranker, or token-aware chunker in this increment. The answer prompt treats passages as untrusted data and returns the exact source chunks supplied to the model; model-generated citations are not independently validated. See the [retrieval guide](retrieval/README.md).
 
 ## Development
 

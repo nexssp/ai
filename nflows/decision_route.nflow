@@ -14,116 +14,139 @@
 
 @pipeline fallback_attempt
     {
-        candidate_id: .attempt.CandidateID,
-        attempt_id: .attempt.AttemptID,
-        model: .attempt.Model,
-        rate_card_id: .attempt.RateCardID,
-        expected_currency: .attempt.ExpectedCurrency,
-        prompt_tokens: .attempt.PromptTokens,
-        cached_prompt_tokens: .attempt.CachedPromptTokens,
-        completion_tokens: .attempt.CompletionTokens,
+        .attempt.candidate_id,
+        .attempt.attempt_id,
+        .attempt.model,
+        .attempt.rate_card_id,
+        .attempt.expected_currency,
+        .attempt.prompt_tokens,
+        .attempt.cached_prompt_tokens,
+        .attempt.completion_tokens,
         prompt: {
-            candidate_id: .attempt.CandidateID,
-            attempt_id: .attempt.AttemptID,
-            provider: .attempt.Provider,
-            model: .attempt.Model,
-            rate_card_id: .attempt.RateCardID,
-            expected_currency: .attempt.ExpectedCurrency,
-            prompt_tokens: .attempt.PromptTokens,
-            cached_prompt_tokens: .attempt.CachedPromptTokens,
-            completion_tokens: .attempt.CompletionTokens,
-            base_url: .attempt.BaseURL,
-            user: .attempt.User,
-            system: .attempt.System,
-            max_tokens: .attempt.MaxTokens,
-            temperature: .attempt.Temperature,
-            json_mode: .attempt.JSONMode,
-            reasoning_effort: .attempt.ReasoningEffort
+            .attempt.candidate_id,
+            .attempt.attempt_id,
+            .attempt.provider,
+            .attempt.model,
+            .attempt.rate_card_id,
+            .attempt.expected_currency,
+            .attempt.prompt_tokens,
+            .attempt.cached_prompt_tokens,
+            .attempt.completion_tokens,
+            .attempt.base_url,
+            .attempt.user,
+            .attempt.system,
+            .attempt.max_tokens,
+            .attempt.temperature,
+            .attempt.json_mode,
+            .attempt.reasoning_effort
         }
     }
     -> ai.cost.estimate
+    -> ai.nflow.view as cost_view
     -> match {
-        result.Known == false -> const @{status: "fallback_preflight_rejected", candidate_id: result.CandidateID, attempt_id: result.AttemptID, issue: result.Issue, provider_called: false},
-        result.Known == true -> {
-            candidate_id: __root__.Prompt.CandidateID,
-            attempt_id: __root__.Prompt.AttemptID,
-            user: __root__.Prompt.User,
-            system: __root__.Prompt.System,
-            provider: __root__.Prompt.Provider,
-            model: __root__.Prompt.Model,
-            rate_card_id: __root__.Prompt.RateCardID,
-            expected_currency: __root__.Prompt.ExpectedCurrency,
-            prompt_tokens: __root__.Prompt.PromptTokens,
-            cached_prompt_tokens: __root__.Prompt.CachedPromptTokens,
-            completion_tokens: __root__.Prompt.CompletionTokens,
-            base_url: __root__.Prompt.BaseURL,
-            max_tokens: __root__.Prompt.MaxTokens,
-            temperature: __root__.Prompt.Temperature,
-            json_mode: __root__.Prompt.JSONMode,
-            reasoning_effort: __root__.Prompt.ReasoningEffort
-        } -> ai.prompt
+        cost_view.known == false
+          -> const @{status: "fallback_preflight_rejected", .candidate_id, .attempt_id, .issue, provider_called: false},
+        cost_view.known == true
+          -> {
+            candidate_id: __root__.prompt.candidate_id,
+            attempt_id: __root__.prompt.attempt_id,
+            user: __root__.prompt.user,
+            system: __root__.prompt.system,
+            provider: __root__.prompt.provider,
+            model: __root__.prompt.model,
+            rate_card_id: __root__.prompt.rate_card_id,
+            expected_currency: __root__.prompt.expected_currency,
+            prompt_tokens: __root__.prompt.prompt_tokens,
+            cached_prompt_tokens: __root__.prompt.cached_prompt_tokens,
+            completion_tokens: __root__.prompt.completion_tokens,
+            base_url: __root__.prompt.base_url,
+            max_tokens: __root__.prompt.max_tokens,
+            temperature: __root__.prompt.temperature,
+            json_mode: __root__.prompt.json_mode,
+            reasoning_effort: __root__.prompt.reasoning_effort
+        }
+          -> ai.prompt
+    }
+@end
+
+@pipeline primary_prompt
+    ai.prompt ? on_error {
+        xerr.KindTimeout
+          -> {attempt: .input.fallback}
+          -> pipeline.fallback_attempt,
+        xerr.KindUnavailable
+          -> {attempt: .input.fallback}
+          -> pipeline.fallback_attempt,
+        xerr.KindCircuitBreaker
+          -> {attempt: .input.fallback}
+          -> pipeline.fallback_attempt,
+        xerr.KindRateLimit
+          -> {attempt: .input.fallback}
+          -> pipeline.fallback_attempt,
+        xerr.KindTooManyRequests
+          -> {attempt: .input.fallback}
+          -> pipeline.fallback_attempt,
+        else
+          -> error.reraise
     }
 @end
 
 @pipeline primary_attempt
     {
-        candidate_id: .primary.CandidateID,
-        attempt_id: .primary.AttemptID,
-        model: .primary.Model,
-        rate_card_id: .primary.RateCardID,
-        expected_currency: .primary.ExpectedCurrency,
-        prompt_tokens: .primary.PromptTokens,
-        cached_prompt_tokens: .primary.CachedPromptTokens,
-        completion_tokens: .primary.CompletionTokens,
+        .primary.candidate_id,
+        .primary.attempt_id,
+        .primary.model,
+        .primary.rate_card_id,
+        .primary.expected_currency,
+        .primary.prompt_tokens,
+        .primary.cached_prompt_tokens,
+        .primary.completion_tokens,
         prompt: {
-            candidate_id: .primary.CandidateID,
-            attempt_id: .primary.AttemptID,
-            provider: .primary.Provider,
-            model: .primary.Model,
-            rate_card_id: .primary.RateCardID,
-            expected_currency: .primary.ExpectedCurrency,
-            prompt_tokens: .primary.PromptTokens,
-            cached_prompt_tokens: .primary.CachedPromptTokens,
-            completion_tokens: .primary.CompletionTokens,
-            base_url: .primary.BaseURL,
-            user: .primary.User,
-            system: .primary.System,
-            max_tokens: .primary.MaxTokens,
-            temperature: .primary.Temperature,
-            json_mode: .primary.JSONMode,
-            reasoning_effort: .primary.ReasoningEffort,
-            fallback: .fallback
+            .primary.candidate_id,
+            .primary.attempt_id,
+            .primary.provider,
+            .primary.model,
+            .primary.rate_card_id,
+            .primary.expected_currency,
+            .primary.prompt_tokens,
+            .primary.cached_prompt_tokens,
+            .primary.completion_tokens,
+            .primary.base_url,
+            .primary.user,
+            .primary.system,
+            .primary.max_tokens,
+            .primary.temperature,
+            .primary.json_mode,
+            .primary.reasoning_effort,
+            .fallback
         }
     }
     -> ai.cost.estimate
+    -> ai.nflow.view as cost_view
     -> match {
-        result.Known == false -> const @{status: "primary_preflight_rejected", candidate_id: result.CandidateID, attempt_id: result.AttemptID, issue: result.Issue, fallback_invoked: false},
-        result.Known == true -> {
-            candidate_id: __root__.Prompt.CandidateID,
-            attempt_id: __root__.Prompt.AttemptID,
-            user: __root__.Prompt.User,
-            system: __root__.Prompt.System,
-            provider: __root__.Prompt.Provider,
-            model: __root__.Prompt.Model,
-            rate_card_id: __root__.Prompt.RateCardID,
-            expected_currency: __root__.Prompt.ExpectedCurrency,
-            prompt_tokens: __root__.Prompt.PromptTokens,
-            cached_prompt_tokens: __root__.Prompt.CachedPromptTokens,
-            completion_tokens: __root__.Prompt.CompletionTokens,
-            base_url: __root__.Prompt.BaseURL,
-            max_tokens: __root__.Prompt.MaxTokens,
-            temperature: __root__.Prompt.Temperature,
-            json_mode: __root__.Prompt.JSONMode,
-            reasoning_effort: __root__.Prompt.ReasoningEffort,
-            fallback: __root__.Prompt.Fallback
-        } -> ai.prompt ? on_error {
-            xerr.KindTimeout -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
-            xerr.KindUnavailable -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
-            xerr.KindCircuitBreaker -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
-            xerr.KindRateLimit -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
-            xerr.KindTooManyRequests -> {attempt: .input.Prompt.Fallback} -> pipeline.fallback_attempt,
-            else -> error.reraise
+        cost_view.known == false
+          -> const @{status: "primary_preflight_rejected", .candidate_id, .attempt_id, .issue, fallback_invoked: false},
+        cost_view.known == true
+          -> {
+            candidate_id: __root__.prompt.candidate_id,
+            attempt_id: __root__.prompt.attempt_id,
+            user: __root__.prompt.user,
+            system: __root__.prompt.system,
+            provider: __root__.prompt.provider,
+            model: __root__.prompt.model,
+            rate_card_id: __root__.prompt.rate_card_id,
+            expected_currency: __root__.prompt.expected_currency,
+            prompt_tokens: __root__.prompt.prompt_tokens,
+            cached_prompt_tokens: __root__.prompt.cached_prompt_tokens,
+            completion_tokens: __root__.prompt.completion_tokens,
+            base_url: __root__.prompt.base_url,
+            max_tokens: __root__.prompt.max_tokens,
+            temperature: __root__.prompt.temperature,
+            json_mode: __root__.prompt.json_mode,
+            reasoning_effort: __root__.prompt.reasoning_effort,
+            fallback: __root__.prompt.fallback
         }
+          -> pipeline.primary_prompt
     }
 @end
 
@@ -147,43 +170,53 @@
             completion_tokens: .decision_max_output_tokens,
             max_output_tokens: .decision_max_output_tokens,
             base_url: .decision_base_url,
-            state: {task: .task, request: .request},
+            state: {.task, .request},
             allowed_ids: [.candidate_a.id, .candidate_b.id],
             questions: [{
                 id: "route",
                 type: "choice",
                 instructions: "Select exactly one configured candidate ID.",
                 criteria: [
-                    {id: .candidate_a.id, description: .candidate_a.description},
-                    {id: .candidate_b.id, description: .candidate_b.description}
+                    {.candidate_a.id, .candidate_a.description},
+                    {.candidate_b.id, .candidate_b.description}
                 ]
             }],
             candidates: [.candidate_a, .candidate_b]
         }
     }
     -> ai.cost.estimate
+    -> ai.nflow.view as cost_view
     -> match {
-        result.Known == false -> const @{status: "decision_preflight_rejected", attempt_id: result.AttemptID, issue: result.Issue, provider_called: false},
-        result.Known == true -> {
-            attempt_id: __root__.Decision.AttemptID,
-            provider: __root__.Decision.Provider,
-            model: __root__.Decision.Model,
-            rate_card_id: __root__.Decision.RateCardID,
-            expected_currency: __root__.Decision.ExpectedCurrency,
-            prompt_tokens: __root__.Decision.PromptTokens,
-            cached_prompt_tokens: __root__.Decision.CachedPromptTokens,
-            completion_tokens: __root__.Decision.CompletionTokens,
-            max_output_tokens: __root__.Decision.MaxOutputTokens,
-            base_url: __root__.Decision.BaseURL,
-            state: __root__.Decision.State,
-            questions: __root__.Decision.Questions,
-            allowed_ids: __root__.Decision.AllowedIDs,
-            candidates: __root__.Decision.Candidates
-        } -> ai.decide
-            -> match {
-                result.Answers[0].Choice == __root__.Candidates[0].ID -> {primary: __root__.Candidates[0].Attempt, fallback: __root__.Candidates[1].Attempt} -> pipeline.primary_attempt,
-                result.Answers[0].Choice == __root__.Candidates[1].ID -> {primary: __root__.Candidates[1].Attempt, fallback: __root__.Candidates[0].Attempt} -> pipeline.primary_attempt,
-                _ -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
+        cost_view.known == false
+          -> const @{status: "decision_preflight_rejected", .attempt_id, .issue, provider_called: false},
+        cost_view.known == true
+          -> {
+            attempt_id: __root__.decision.attempt_id,
+            provider: __root__.decision.provider,
+            model: __root__.decision.model,
+            rate_card_id: __root__.decision.rate_card_id,
+            expected_currency: __root__.decision.expected_currency,
+            prompt_tokens: __root__.decision.prompt_tokens,
+            cached_prompt_tokens: __root__.decision.cached_prompt_tokens,
+            completion_tokens: __root__.decision.completion_tokens,
+            max_output_tokens: __root__.decision.max_output_tokens,
+            base_url: __root__.decision.base_url,
+            state: __root__.decision.state,
+            questions: __root__.decision.questions,
+            allowed_ids: __root__.decision.allowed_ids,
+            candidates: __root__.decision.candidates
+        }
+          -> ai.decide
+                    -> ai.nflow.view as decision_result
+                    -> match {
+                decision_result.answers[0].choice == __root__.candidates[0].id
+                  -> {primary: __root__.candidates[0].attempt, fallback: __root__.candidates[1].attempt}
+                  -> pipeline.primary_attempt,
+                decision_result.answers[0].choice == __root__.candidates[1].id
+                  -> {primary: __root__.candidates[1].attempt, fallback: __root__.candidates[0].attempt}
+                  -> pipeline.primary_attempt,
+                _
+                  -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
             }
     }
 @end

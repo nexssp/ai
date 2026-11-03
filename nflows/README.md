@@ -1,6 +1,6 @@
 # ai as a reusable NFlow package
 
-`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.65.0`; the `nflow` runtime/CLI is installed separately from the Go module.
+`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.67.1`; the `nflow` runtime/CLI is installed separately from the Go module.
 
 ## Load the package
 
@@ -26,7 +26,26 @@ The library exports `ai.prompt`, `ai.team`, `ai.decide`, and `ai.cost.estimate`.
 
 `ai.decide` requires a positive `max_output_tokens` cap. Anthropic's official Structured Outputs API (`decision_provider: "anthropic"`) receives the cap in `max_tokens` and a typed JSON Schema in `output_config.format`. OpenAI, Gemini, xAI, DeepSeek, and Inception chat (`decision_provider: "inception-chat"`) use locally validated JSON-mode adapters; the cap is sent using each provider's documented field, and reported output usage above the cap is rejected. The documented Inception native `/v1/decisions` and TypeSafe `/v1/systemone` request schemas expose no provider-enforced output cap, so those native adapters fail closed before HTTP dispatch. JSON mode is not claimed to be equivalent to a native decision endpoint or schema-constrained output. Unverified provider names are rejected rather than silently adapted.
 
-The decision action validates the candidate allowlist and returns a typed `DecisionResponse` with ordered `[]DecisionAnswer`; NFlow owns the routing graph and branch behavior. See [`decision_route.nflow`](decision_route.nflow) for a working `match` example. Flow expression access to Go structs uses exported Go field names, so that workflow branches on `result.Answers[0].Choice`. `ai.cost.estimate` uses `max_output_tokens` as the nested decision's completion-cost basis, but it does not bill, reserve, or authorize selector spend. The application host guard must approve and reserve cost before provider dispatch.
+The decision action validates the candidate allowlist and returns a typed `DecisionResponse` with ordered `[]DecisionAnswer`; NFlow owns the routing graph and branch behavior. See [`decision_route.nflow`](decision_route.nflow) for a working `match` example. NFlow `@schema` field names are declared in snake_case and used directly without `json` tags. The workflow uses `ai.nflow.view` only after typed action outputs, then branches on `decision_result.answers[0].choice`. `ai.cost.estimate` uses `max_output_tokens` as the nested decision's completion-cost basis, but it does not bill, reserve, or authorize selector spend. The application host guard must approve and reserve cost before provider dispatch.
+
+## Vector retrieval and grounded answers
+
+The bundle also exposes `ai.retrieval.index`, `ai.retrieval.search`, `ai.retrieval.delete`, and `ai.rag.answer`. Each has a concrete Go request/response type; `ai.rag.answer` returns the exact source chunks supplied to the model. Retrieved excerpts are marked as untrusted reference data, and the answer action does not claim to verify model-generated citations. All index/search/delete operations require a namespace, which callers should treat as an authorization and data-isolation boundary.
+
+Hosts inject a configured `retrieval.Service` when building the bundle. The service owns AI policy (chunking, embeddings, search, and prompt assembly); its `VectorIndex` is the adapter boundary, while generic persistence belongs in `nexssp/storage`.
+
+```go
+service, err := retrieval.NewService(retrieval.Config{}, embedder, vectorIndex)
+if err != nil {
+    return err
+}
+bundle, err := nexssflow.NewBundleWithServices(globalOptions, providerBuilder, service)
+if err != nil {
+    return err
+}
+```
+
+[`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.67.1` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
 
 ## Reusable critic workflow
 

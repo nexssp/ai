@@ -1,0 +1,95 @@
+@description "Typed, namespace-scoped retrieval and grounded RAG actions"
+@nflow_version ">=0.67.1"
+@require ../ as ai {
+  provider: "openai",
+  model: "your-chat-model",
+  api_key_env: "OPENAI_API_KEY"
+}
+
+@schema RetrievalDocument {
+  namespace string `validate:"required"`
+  id string `validate:"required"`
+  text string `validate:"required"`
+  metadata map[string]string
+}
+
+@schema RetrievalDeleteRequest {
+  namespace string `validate:"required"`
+  document_id string `validate:"required"`
+}
+
+@schema RetrievalDeleteResponse {
+  namespace string
+  document_id string
+  deleted bool
+}
+
+@schema RetrievalIndexResult {
+  namespace string
+  document_id string
+  chunk_count int
+}
+
+@schema RetrievalSearchRequest {
+  namespace string `validate:"required"`
+  query string `validate:"required"`
+  top_k int `validate:"gte=0"`
+  min_score float32 `validate:"gte=0,lte=1"`
+}
+
+@schema RetrievalMatch {
+  namespace string
+  document_id string
+  chunk_id string
+  text string
+  metadata map[string]string
+  score float32
+}
+
+@schema RetrievalSearchResponse {
+  matches []RetrievalMatch
+}
+
+@schema RAGAnswerRequest {
+  namespace string `validate:"required"`
+  query string `validate:"required"`
+  top_k int `validate:"gte=0"`
+  min_score float32 `validate:"gte=0,lte=1"`
+  provider string
+  model string
+  base_url string
+  system_prompt string
+  max_tokens int `validate:"gte=0"`
+}
+
+@schema RAGAnswerResponse {
+  answer string
+  sources []RetrievalMatch
+  model string
+}
+
+@pipeline index_document
+  :request-schema=!RetrievalDocument
+  :response-schema=!RetrievalIndexResult
+  ai.retrieval.index
+@end
+
+@pipeline delete_document
+  :request-schema=!RetrievalDeleteRequest
+  :response-schema=!RetrievalDeleteResponse
+  ai.retrieval.delete
+@end
+
+@pipeline search_sources
+  :request-schema=!RetrievalSearchRequest
+  :response-schema=!RetrievalSearchResponse
+  ai.retrieval.search
+@end
+
+@pipeline answer
+  :request-schema=!RAGAnswerRequest
+  :response-schema=!RAGAnswerResponse
+  ai.rag.answer
+@end
+
+pipeline.answer

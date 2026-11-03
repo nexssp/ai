@@ -208,12 +208,12 @@ func TestNFlowOwnsDecisionRoutingGraph(t *testing.T) {
 			{id: "candidate-a", description: "A", attempt: {candidate_id: "candidate-a", attempt_id: "candidate-attempt-a", provider: "fake", model: "model-a", rate_card_id: "rate-a", expected_currency: "EUR", prompt_tokens: 10, completion_tokens: 5, user: "request"}},
 			{id: "candidate-b", description: "B", attempt: {candidate_id: "candidate-b", attempt_id: "candidate-attempt-b", provider: "fake", model: "model-b", rate_card_id: "rate-b", expected_currency: "EUR", prompt_tokens: 10, completion_tokens: 5, user: "request"}}
 		]
-	} -> ai.decide
-	-> match {
-		result.Answers[0].Choice == "candidate-a" -> const @{route: "candidate-a"},
-		result.Answers[0].Choice == "candidate-b" && result.AttemptID == "decision-attempt-1" && result.Candidates[1].Attempt.Model == "model-b" -> const @{route: "candidate-b"},
-	    _ -> const @{route: "manual-review"},
-	}`
+		} -> ai.decide -> ai.nflow.view as decision_result
+		-> match {
+			decision_result.answers[0].choice == "candidate-a" -> const @{route: "candidate-a"},
+			decision_result.answers[0].choice == "candidate-b" && decision_result.attempt_id == "decision-attempt-1" && decision_result.candidates[1].attempt.model == "model-b" -> const @{route: "candidate-b"},
+		    _ -> const @{route: "manual-review"},
+		}`
 	execution, err := runner.Execute(context.Background(), cfg, source, "decision-route-test.nflow", nil)
 	if err != nil {
 		t.Fatalf("runner.Execute: %v", err)

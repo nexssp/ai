@@ -9,7 +9,11 @@ import (
 	"github.com/nexssp/ai/engine/llm"
 )
 
-type providerBuilder func(GlobalOptions, LLMDecl) (llm.Provider, error)
+// ProviderBuilder lets a host supply a Provider implementation, such as a
+// gateway, to the ai.prompt, ai.team, and ai.rag.answer Flow actions.
+type ProviderBuilder func(GlobalOptions, LLMDecl) (llm.Provider, error)
+
+type providerBuilder = ProviderBuilder
 
 // newPromptAction builds the reusable ai.prompt action.
 func newPromptAction(global GlobalOptions) action.AnyAction {

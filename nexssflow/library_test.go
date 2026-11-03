@@ -14,6 +14,7 @@ import (
 	"github.com/nexssp/flow/runner"
 
 	"github.com/nexssp/ai/engine/llm"
+	aigateway "github.com/nexssp/ai/gateway"
 )
 
 type fakeProvider struct {
@@ -45,10 +46,13 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 
 	provider := &fakeProvider{}
 	var resolvedGlobal GlobalOptions
-	bundle := bundleWithBuilder(GlobalOptions{DefaultModel: "configured-model"}, func(global GlobalOptions, _ LLMDecl) (llm.Provider, error) {
+	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{DefaultModel: "configured-model"}, func(global GlobalOptions, _ LLMDecl) (llm.Provider, error) {
 		resolvedGlobal = global
 		return provider, nil
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bundle.ID != ID || len(bundle.Libraries) != 1 || bundle.Libraries[0].Name != "ai" {
 		t.Fatalf("unexpected Flow bundle: %+v", bundle)
 	}
@@ -64,7 +68,10 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	for _, name := range []string{"ai.prompt", "ai.team", "ai.decide", "ai.cost.estimate"} {
+	for _, name := range []string{
+		"ai.prompt", "ai.team", "ai.decide", "ai.cost.estimate", "ai.nflow.view",
+		"ai.retrieval.index", "ai.retrieval.delete", "ai.retrieval.search", "ai.rag.answer",
+	} {
 		if _, found := cfg.Resolver.Action(name); !found {
 			t.Fatalf("%s was not mounted in the Flow resolver", name)
 		}
@@ -96,6 +103,61 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	}
 	if resolvedGlobal.DefaultModel != "configured-model" || provider.request.Model != "" || len(provider.request.Messages) != 2 || provider.request.Messages[0].Content != "Be concise" || provider.request.Messages[1].Content != "What is 2+2?" {
 		t.Fatalf("unexpected AI request: %+v", provider.request)
+	}
+}
+
+func TestNewBundleWithProviderBuilderRejectsNilBuilder(t *testing.T) {
+	if _, err := NewBundleWithProviderBuilder(GlobalOptions{}, nil); err == nil {
+		t.Fatal("NewBundleWithProviderBuilder accepted a nil provider builder")
+	}
+}
+
+func TestFlowBundleCanInjectGateway(t *testing.T) {
+	provider := &fakeProvider{}
+	selectorCalled := false
+	gateCalled := false
+	gw, err := aigateway.New(aigateway.Config{
+		Routes: []aigateway.Route{{Name: "candidate-route", Model: "routed-model", Provider: provider}},
+		Select: func(_ context.Context, req llm.Request) (string, error) {
+			selectorCalled = req.CandidateID == "candidate-fast"
+			return "candidate-route", nil
+		},
+		Gates: []aigateway.Gate{func(_ context.Context, req llm.Request, route aigateway.Route) error {
+			gateCalled = req.AttemptID == "attempt-9" && route.Name == "candidate-route"
+			return nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+		return gw, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := runner.BuildConfig(append(native.Bundles(), bundle))
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	execution, err := runner.Execute(context.Background(), cfg, "ai.prompt", "gateway-prompt-test.nflow", map[string]any{
+		"candidate_id": "candidate-fast",
+		"attempt_id":   "attempt-9",
+		"model":        "caller-model",
+		"user":         "route this prompt",
+	})
+	if err != nil {
+		t.Fatalf("runner.Execute: %v", err)
+	}
+	out, ok := execution.Output.(PromptResult)
+	if !ok {
+		t.Fatalf("output type = %T, want PromptResult", execution.Output)
+	}
+	if !selectorCalled || !gateCalled || provider.calls != 1 || provider.request.Model != "routed-model" {
+		t.Fatalf("gateway injection failed: selector=%v gate=%v calls=%d request=%#v", selectorCalled, gateCalled, provider.calls, provider.request)
+	}
+	if out.Model != "routed-model" || out.CandidateID != "candidate-fast" || out.AttemptID != "attempt-9" {
+		t.Fatalf("unexpected gateway-routed Flow result: %+v", out)
 	}
 }
 

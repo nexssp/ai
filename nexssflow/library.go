@@ -1,4 +1,4 @@
-// Package nexssflow exposes reusable AI actions to Flow v0.65.0 and newer.
+// Package nexssflow exposes reusable AI actions to Flow v0.67.1 and newer.
 package nexssflow
 
 import (
@@ -12,6 +12,7 @@ import (
 
 	siaimodules "github.com/nexssp/ai"
 	"github.com/nexssp/ai/engine/llm"
+	"github.com/nexssp/ai/retrieval"
 )
 
 const ID = "ai"
@@ -54,7 +55,7 @@ type DecisionDecl struct {
 	BaseURL  string
 }
 
-// Bundle exposes AI actions as a Flow v0.65.0 library using canonical names.
+// Bundle exposes AI actions as a Flow v0.67.1 library using canonical names.
 func Bundle(raw map[string]string) compiler.Bundle {
 	global, err := options(raw)
 	builder := providerBuilder(buildProvider)
@@ -62,6 +63,31 @@ func Bundle(raw map[string]string) compiler.Bundle {
 		builder = func(GlobalOptions, LLMDecl) (llm.Provider, error) { return nil, err }
 	}
 	return bundleWithBuilder(global, builder)
+}
+
+// NewBundleWithProviderBuilder creates an AI Flow bundle whose prompt and team
+// actions use a host-supplied provider builder. Hosts can use it to inject a
+// gateway while retaining the standard typed actions and default decision
+// provider builder.
+func NewBundleWithProviderBuilder(global GlobalOptions, builder ProviderBuilder) (compiler.Bundle, error) {
+	if builder == nil {
+		return compiler.Bundle{}, xerr.Validation("ai: provider builder is required")
+	}
+	return bundleWithBuilder(global, builder), nil
+}
+
+// NewBundleWithServices creates a Flow bundle with an injected retrieval
+// service and provider builder. The service owns the embedder and vector index;
+// a host may use retrieval.NewMemoryIndex for tests/demos or provide an adapter
+// backed by its selected persistence implementation.
+func NewBundleWithServices(global GlobalOptions, builder ProviderBuilder, service *retrieval.Service) (compiler.Bundle, error) {
+	if builder == nil {
+		return compiler.Bundle{}, xerr.Validation("ai: provider builder is required")
+	}
+	if service == nil {
+		return compiler.Bundle{}, xerr.Validation("ai: retrieval service is required")
+	}
+	return bundleWithServices(global, builder, service), nil
 }
 
 func options(raw map[string]string) (GlobalOptions, error) {
@@ -95,23 +121,34 @@ func options(raw map[string]string) (GlobalOptions, error) {
 }
 
 func bundleWithBuilder(global GlobalOptions, builder providerBuilder) compiler.Bundle {
-	return bundleWithBuilders(global, builder, buildDecisionProvider)
+	return bundleWithServices(global, builder, nil)
 }
 
 func bundleWithBuilders(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder) compiler.Bundle {
+	return bundleWithBuilderAndServices(global, builder, decisions, nil)
+}
+
+func bundleWithServices(global GlobalOptions, builder providerBuilder, service *retrieval.Service) compiler.Bundle {
+	return bundleWithBuilderAndServices(global, builder, buildDecisionProvider, service)
+}
+
+func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder, service *retrieval.Service) compiler.Bundle {
+	actions := []action.AnyAction{
+		newPromptActionWith(global, builder),
+		newTeamActionWith(global, builder),
+		newDecisionActionWith(global, decisions),
+		newCostEstimateAction(),
+		newNFlowViewAction(),
+	}
+	actions = append(actions, newRetrievalActions(global, builder, service)...)
 	return compiler.Bundle{
 		ID:              ID,
 		SourceModules:   siaimodules.SourceModules,
 		ExportedModules: []string{criticModule},
 		AcceptedOptions: append([]string(nil), acceptedOptions...),
 		Libraries: []action.Library{{
-			Name: "ai",
-			Actions: []action.AnyAction{
-				newPromptActionWith(global, builder),
-				newTeamActionWith(global, builder),
-				newDecisionActionWith(global, decisions),
-				newCostEstimateAction(),
-			},
+			Name:    "ai",
+			Actions: actions,
 		}},
 	}
 }
