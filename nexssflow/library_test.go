@@ -59,6 +59,9 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	if len(bundle.Libraries[0].Aliases) != 0 {
 		t.Fatal("Flow bundle must expose canonical actions without aliases")
 	}
+	if !slices.Contains(bundle.ExportedModules, llamaCppModule) {
+		t.Fatalf("AI bundle does not export %q", llamaCppModule)
+	}
 	if factory == nil {
 		t.Fatal("registered bundle factory is nil")
 	}
@@ -70,7 +73,9 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	}
 	for _, name := range []string{
 		"ai.prompt", "ai.team", "ai.decide", "ai.cost.estimate", "ai.nflow.view",
+		"ai.weights.adapters", "ai.weights.inspect", "ai.weights.patch",
 		"ai.retrieval.index", "ai.retrieval.delete", "ai.retrieval.search", "ai.rag.answer",
+		"external.exec",
 	} {
 		if _, found := cfg.Resolver.Action(name); !found {
 			t.Fatalf("%s was not mounted in the Flow resolver", name)

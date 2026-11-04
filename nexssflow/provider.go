@@ -11,9 +11,14 @@ import (
 
 // buildProvider resolves a one-model call from per-call or global configuration.
 func buildProvider(global GlobalOptions, decl LLMDecl) (llm.Provider, error) {
-	providerName := firstNonEmpty(decl.Provider, global.Provider, "openai")
-	baseURL := firstNonEmpty(decl.BaseURL, global.BaseURL)
-	cfg, err := providerConfig(global, providerName, firstNonEmpty(decl.Model, global.DefaultModel), baseURL, global.APIKeyEnv)
+	providerName := firstNonEmpty(decl.Provider, global.Provider, os.Getenv("LLM_PROVIDER"))
+	if providerName == "" {
+		return nil, xerr.Validation("ai: provider is required; set @require provider or LLM_PROVIDER")
+	}
+	model := firstNonEmpty(decl.Model, global.DefaultModel, os.Getenv("LLM_MODEL"))
+	baseURL := firstNonEmpty(decl.BaseURL, global.BaseURL, os.Getenv("LLM_BASE_URL"))
+	apiKeyEnv := firstNonEmpty(global.APIKeyEnv, os.Getenv("LLM_API_KEY_ENV"))
+	cfg, err := providerConfig(global, providerName, model, baseURL, apiKeyEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -25,16 +30,16 @@ type decisionProviderBuilder func(GlobalOptions, DecisionDecl) (llm.DecisionProv
 // buildDecisionProvider does not inherit the candidate model. The caller must
 // configure a dedicated decision model either per action or in @require.
 func buildDecisionProvider(global GlobalOptions, decl DecisionDecl) (llm.DecisionProvider, error) {
-	providerName := firstNonEmpty(decl.Provider, global.DecisionProvider, global.Provider)
-	model := firstNonEmpty(decl.Model, global.DecisionModel)
+	providerName := firstNonEmpty(decl.Provider, global.DecisionProvider, global.Provider, os.Getenv("LLM_DECISION_PROVIDER"), os.Getenv("LLM_PROVIDER"))
+	model := firstNonEmpty(decl.Model, global.DecisionModel, os.Getenv("LLM_DECISION_MODEL"))
 	if providerName == "" {
 		return nil, xerr.Validation("ai.decide: decision_provider is required")
 	}
 	if model == "" {
 		return nil, xerr.Validation("ai.decide: decision_model is required")
 	}
-	baseURL := firstNonEmpty(decl.BaseURL, global.DecisionBaseURL)
-	apiKeyEnv := firstNonEmpty(global.DecisionAPIKeyEnv, global.APIKeyEnv)
+	baseURL := firstNonEmpty(decl.BaseURL, global.DecisionBaseURL, os.Getenv("LLM_DECISION_BASE_URL"), os.Getenv("LLM_BASE_URL"))
+	apiKeyEnv := firstNonEmpty(global.DecisionAPIKeyEnv, global.APIKeyEnv, os.Getenv("LLM_DECISION_API_KEY_ENV"), os.Getenv("LLM_API_KEY_ENV"))
 	cfg, err := providerConfig(global, providerName, model, baseURL, apiKeyEnv)
 	if err != nil {
 		return nil, err
@@ -59,7 +64,7 @@ func buildDecisionProvider(global GlobalOptions, decl DecisionDecl) (llm.Decisio
 		return decisionProvider, nil
 	}
 	switch providerName {
-	case "openai", "xai", "deepseek", "gemini", "inception-chat":
+	case "openai", "openai-compatible", "xai", "deepseek", "gemini", "inception-chat":
 		return llm.NewJSONDecisionProvider(provider), nil
 	case "anthropic", "claude":
 		anthropic, ok := provider.(*llm.AnthropicProvider)
@@ -82,7 +87,7 @@ func providerConfig(global GlobalOptions, providerName, model, baseURL, apiKeyEn
 	if global.Timeout < 0 {
 		return llm.Config{}, xerr.Validation("ai: timeout must be positive")
 	}
-	apiKey := ""
+	apiKey := os.Getenv("LLM_API_KEY")
 	if apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
 	}

@@ -1,0 +1,54 @@
+@description "Format-aware SafeTensors and GGUF checkpoint inspection and bounded scalar editing"
+@nflow_version ">=0.67.1"
+
+@schema WeightModel {
+  model_id string `validate:"required"`
+  format string `validate:"required,oneof=safetensors gguf pytorch"`
+  # Supported formats still require an exact adapter; PyTorch has none.
+  adapter string
+  path string `validate:"required"`
+}
+
+# Model IDs are caller-provided labels; format and adapter selection is explicit.
+# PyTorch is named so callers receive the safe-parser limitation rather than
+# accidental format inference; no pickle checkpoint is loaded or executed.
+@schema WeightInspectRequest {
+  model WeightModel
+  include_sha256 bool
+  sample_elements int `validate:"gte=0,lte=32"`
+}
+
+@schema WeightEdit {
+  tensor string `validate:"required"`
+  index int `validate:"gte=0"`
+  delta float64
+  expected_value float64
+}
+
+@schema WeightPatchRequest {
+  model WeightModel
+  output_path string `validate:"required"`
+  source_sha256 string `validate:"required,len=64"`
+  edits []WeightEdit `validate:"required,min=1,max=16384,dive"`
+  overwrite bool
+}
+
+# List implemented file-editing adapters. PyTorch pickle checkpoints are not an
+# implemented format, and no adapter implies model-family compatibility.
+@pipeline list_adapters
+  ai.weights.adapters
+@end
+
+# Set include_sha256=true before patching. Hashing reads every file in a sharded
+# SafeTensors bundle, including its index, or the complete single checkpoint.
+@pipeline inspect
+  :request-schema=!WeightInspectRequest
+  ai.weights.inspect
+@end
+
+# Patching requires the exact SHA-256 reported by inspect and writes new output.
+# Indexed SafeTensors outputs use a standard index and newly written shard files.
+@pipeline patch
+  :request-schema=!WeightPatchRequest
+  ai.weights.patch
+@end

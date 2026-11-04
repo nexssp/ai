@@ -1,0 +1,13 @@
+@description "Inspect one selected SafeTensors checkpoint through the ai weights module"
+@require ../ as ai
+@include ai:nflows/lib/weights.nflow AS weights
+
+@pipeline inspect_weights
+    {
+        model: .model,
+        include_sha256: true,
+        sample_elements: 4
+    } -> weights.pipeline.inspect
+@end
+
+pipeline.inspect_weights

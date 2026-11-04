@@ -20,11 +20,13 @@ import (
 
 func TestCriticWorkflowRunsThroughFlowWithLocalFakeProvider(t *testing.T) {
 	const (
-		keyEnvName = "OPENAI_API_KEY"
+		keyEnvName = "LLM_API_KEY"
 		testAPIKey = "local-workflow-test-token"
 		answer     = `{"approved":false,"score":25,"critique":"Missing error handling.","defects":["No timeout"]}`
 	)
 	t.Setenv(keyEnvName, testAPIKey)
+	t.Setenv("LLM_PROVIDER", "openai-compatible")
+	t.Setenv("LLM_MODEL", "local-fake-model")
 
 	type promptMessage struct {
 		Role    string `json:"role"`
@@ -119,7 +121,7 @@ func TestCriticWorkflowRunsThroughFlowWithLocalFakeProvider(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if req.Model != "your-model-id" || req.MaxTokens != 1024 || req.Temperature != 0.1 || req.ResponseFormat.Type != "json_object" {
+		if req.Model != "local-fake-model" || req.MaxTokens != 1024 || req.Temperature != 0.1 || req.ResponseFormat.Type != "json_object" {
 			t.Errorf("provider parameters = %+v, want critic model, sampling settings, and JSON-object mode", req)
 		}
 		if len(req.Messages) != 2 || req.Messages[0].Role != "system" || !strings.Contains(req.Messages[0].Content, "untrusted review data") ||
@@ -205,8 +207,8 @@ func TestRequiredBundleImportsEmbeddedCriticAlongsideGoAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve ai bundle: %v", err)
 	}
-	if len(requiredBundles) != 1 || requiredBundles[0].Alias != "ai" || len(requiredBundles[0].ExportedModules) != 1 || requiredBundles[0].ExportedModules[0] != criticModule {
-		t.Fatalf("required ai bundle = %+v, want its Go actions and exported critic module", requiredBundles)
+	if len(requiredBundles) != 1 || requiredBundles[0].Alias != "ai" || len(requiredBundles[0].ExportedModules) != 3 || requiredBundles[0].ExportedModules[0] != criticModule || requiredBundles[0].ExportedModules[1] != weightsModule || requiredBundles[0].ExportedModules[2] != llamaCppModule {
+		t.Fatalf("required ai bundle = %+v, want its Go actions and exported critic/weights/llama.cpp modules", requiredBundles)
 	}
 	cfg, err := runner.BuildConfig(append(native.Bundles(), requiredBundles...))
 	if err != nil {

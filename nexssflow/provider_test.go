@@ -13,7 +13,7 @@ import (
 
 func TestPromptActionUsesConfiguredProviderAndSendsExpectedRequest(t *testing.T) {
 	const (
-		keyEnvName = "SI_AI_TEST_PROVIDER_KEY"
+		keyEnvName = "LLM_API_KEY"
 		testAPIKey = "local-test-token-not-a-secret"
 	)
 	t.Setenv(keyEnvName, testAPIKey)
@@ -54,13 +54,12 @@ func TestPromptActionUsesConfiguredProviderAndSendsExpectedRequest(t *testing.T)
 		_, _ = io.WriteString(w, `{"model":"served-model","choices":[{"message":{"role":"assistant","content":"local fake answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}`)
 	}))
 	defer server.Close()
+	t.Setenv("LLM_PROVIDER", "openai-compatible")
+	t.Setenv("LLM_MODEL", "configured-local-model")
+	t.Setenv("LLM_BASE_URL", server.URL+"/custom/v1/")
 
 	act := newPromptAction(GlobalOptions{
-		APIKeyEnv:    keyEnvName,
-		Timeout:      2 * time.Second,
-		DefaultModel: "configured-local-model",
-		Provider:     "openai",
-		BaseURL:      server.URL + "/custom/v1/",
+		Timeout: 2 * time.Second,
 	})
 	got, err := act.DoAny(context.Background(), PromptRequest{
 		CandidateID: "candidate-a",
@@ -106,5 +105,33 @@ func TestPromptActionUsesConfiguredProviderAndSendsExpectedRequest(t *testing.T)
 	}
 	if out.Content != "local fake answer" || out.Model != "served-model" || out.CandidateID != "candidate-a" || out.AttemptID != "attempt-1" || out.PromptTokens != 4 || out.CompTokens != 2 || out.TotalTokens != 6 || string(out.Context) != `{"job":"keep-explicit"}` {
 		t.Errorf("action output = %+v, want typed provider result and explicitly carried context", out)
+	}
+}
+
+func TestBuildProviderRequiresExplicitProvider(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "")
+	if _, err := buildProvider(GlobalOptions{}, LLMDecl{}); err == nil || !strings.Contains(err.Error(), "LLM_PROVIDER") {
+		t.Fatalf("buildProvider error = %v, want a clear provider configuration error", err)
+	}
+}
+
+func TestBuildProviderAcceptsAvailableDrivers(t *testing.T) {
+	t.Setenv("LLM_MODEL", "")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_BASE_URL", "https://custom.example/v1")
+	for _, name := range []string{
+		"openai-compatible", "openai", "groq", "nvidia", "nim", "deepseek", "openrouter",
+		"lmstudio", "vllm", "xai", "inception", "anthropic", "claude", "gemini", "google", "ollama", "ollama_cloud",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("LLM_PROVIDER", name)
+			provider, err := buildProvider(GlobalOptions{}, LLMDecl{})
+			if err != nil {
+				t.Fatalf("buildProvider(%q): %v", name, err)
+			}
+			if provider.Name() == "" {
+				t.Fatalf("provider %q has an empty name", name)
+			}
+		})
 	}
 }

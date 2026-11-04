@@ -40,6 +40,11 @@ type modelIDWire struct {
 // returns no fabricated model IDs when the provider catalog is unavailable.
 func FetchModels(ctx context.Context, providerType, apiKey, baseURL string) ([]string, error) {
 	switch strings.ToLower(providerType) {
+	case providerOpenAICompatible:
+		if strings.TrimSpace(baseURL) == "" {
+			return nil, xerr.Validation("llm: openai-compatible model discovery requires a base URL")
+		}
+		return fetchOpenAIModels(ctx, providerType, apiKey, baseURL)
 	case providerOllama, "ollama_cloud":
 		return fetchOllamaModels(ctx, apiKey, baseURL)
 	case "typesafe":

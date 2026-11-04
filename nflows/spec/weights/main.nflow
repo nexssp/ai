@@ -1,0 +1,18 @@
+@description "Contract tests for checkpoint format adapter declarations"
+@require ../../../ as ai
+@include ai:nflows/lib/weights.nflow AS weights
+
+@pipeline list_adapters
+  weights.pipeline.list_adapters
+@end
+
+pipeline.list_adapters
+@test: len(result) == 2
+@test: result[0].id == "safetensors.scalar-delta.v1"
+@test: result[0].format == "safetensors"
+@test: result[0].supports_sharded_files == true
+@test: result[0].supports_inference == false
+@test: result[1].id == "gguf.float-scalar-delta.v1"
+@test: result[1].format == "gguf"
+@test: result[1].supports_sharded_files == false
+@test: result[1].supports_inference == false

@@ -23,13 +23,15 @@ import (
 
 func TestRolesWorkflowSharesMessagesWithinOneFlowRun(t *testing.T) {
 	const (
-		keyEnvName = "SI_AI_TEST_PROVIDER_KEY"
+		keyEnvName = "LLM_API_KEY"
 		testAPIKey = "local-team-test-token"
 		goal       = "Suggest a safe API timeout policy."
 		firstReply = "The service must enforce a bounded request deadline."
 		lastReply  = "Set a bounded deadline and return a controlled timeout response."
 	)
 	t.Setenv(keyEnvName, testAPIKey)
+	t.Setenv("LLM_PROVIDER", "openai-compatible")
+	t.Setenv("LLM_MODEL", "local-fake-model")
 
 	type promptMessage struct {
 		Role    string `json:"role"`

@@ -57,7 +57,9 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 	}
 	expectedSynthesisUser := "Combine independent findings in source order:\nAnalyst: " + analystFinding + "\nSecurity: " + securityFinding + "\nImplementation: " + implementationFinding
 
-	t.Setenv("SI_AI_TEST_PROVIDER_KEY", parallelRoleTestAPIKey)
+	t.Setenv("LLM_PROVIDER", "openai-compatible")
+	t.Setenv("LLM_MODEL", "local-fake-model")
+	t.Setenv("LLM_API_KEY", parallelRoleTestAPIKey)
 	var mu sync.Mutex
 	var roleCalls, activeRoles, maxActiveRoles, synthesisCalls int
 	roleCounts := make(map[string]int)
@@ -150,6 +152,7 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer server.Close()
+	t.Setenv("LLM_BASE_URL", server.URL+"/v1")
 
 	workflowPath := filepath.Join("..", "nflows", "parallel_roles.nflow")
 	source, err := os.ReadFile(workflowPath)
@@ -157,17 +160,6 @@ func TestParallelRoleWorkflowViaFlowCLIWithLocalFakeProvider(t *testing.T) {
 		t.Fatalf("read workflow: %v", err)
 	}
 	text := string(source)
-	oldModel := `model: "your-model-id",`
-	newModel := `model: "local-fake-model",` + "\n" + `    base_url: "` + server.URL + `/v1",`
-	if strings.Count(text, oldModel) != 1 {
-		t.Fatalf("workflow must contain exactly one %q setting", oldModel)
-	}
-	text = strings.Replace(text, oldModel, newModel, 1)
-	oldKeyEnv := `api_key_env: "OPENAI_API_KEY"`
-	if strings.Count(text, oldKeyEnv) != 1 {
-		t.Fatalf("workflow must contain exactly one %q setting", oldKeyEnv)
-	}
-	text = strings.Replace(text, oldKeyEnv, `api_key_env: "SI_AI_TEST_PROVIDER_KEY"`, 1)
 
 	flowFile, err := os.CreateTemp(filepath.Join("..", "nflows"), ".parallel-roles-cli-*.nflow")
 	if err != nil {

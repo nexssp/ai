@@ -1,10 +1,6 @@
 @description "Typed, namespace-scoped retrieval and grounded RAG actions"
 @nflow_version ">=0.67.1"
-@require ../ as ai {
-  provider: "openai",
-  model: "your-chat-model",
-  api_key_env: "OPENAI_API_KEY"
-}
+@require ../ as ai
 
 @schema RetrievalDocument {
   namespace string `validate:"required"`

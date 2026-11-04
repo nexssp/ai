@@ -1,0 +1,47 @@
+@description "Toy 2: a coordinated pair of scalar edits"
+@require ../../.. as ai {
+    timeout: "30s"
+}
+@include ai:nflows/lib/weights.nflow AS weights
+# Supply a workspace-relative checkpoint, a distinct versioned output path, and
+# caller-verified coordinates/values. This flow proposes a candidate, not a release.
+@pipeline toy_pair
+    {model: .model, include_sha256: true, sample_elements: 4}
+    -> weights.pipeline.inspect
+    -> ai.nflow.view as inspection
+    -> {
+        attempt_id: "toy-pair-edit",
+        max_output_tokens: 48,
+        state: {
+            scenario: "Toy example: choose whether to apply a predeclared two-coordinate candidate; both expected values are checked.",
+            evidence: input.evidence,
+            target_a: input.coordinate_a,
+            current_value_a: input.current_value_a,
+            target_b: input.coordinate_b,
+            current_value_b: input.current_value_b,
+            inspected_source_sha256: inspection.sha256
+        },
+        allowed_ids: ["hold", "apply_pair"],
+        questions: [{
+            id: "edit_plan",
+            type: "choice",
+            instructions: "Choose only a listed plan from the supplied evidence; otherwise choose hold.",
+            criteria: [{id: "hold", description: "Make no change"}, {id: "apply_pair", description: "Apply both fixed, opposite-sign nudges together"}]
+        }]
+    }
+    -> ai.decide
+    -> ai.nflow.view as decision
+    -> match {
+        decision.answers[0].choice == "hold" -> const @{status: "held", output_written: false},
+        decision.answers[0].choice == "apply_pair" -> {
+            model: input.model,
+            output_path: input.output_path,
+            source_sha256: inspection.sha256,
+            edits: [{tensor: input.coordinate_a.tensor, index: input.coordinate_a.index, delta: 0.0001, expected_value: input.current_value_a}, {tensor: input.coordinate_b.tensor, index: input.coordinate_b.index, delta: -0.0001, expected_value: input.current_value_b}],
+            overwrite: false
+        } -> weights.pipeline.patch -> ai.nflow.view as patch_result
+        -> const @{status: "toy_copy_written", choice: "apply_pair", output_written: true, result: .patch_result},
+        _ -> const @{status: "manual_review", output_written: false}
+    }
+@end
+pipeline.toy_pair

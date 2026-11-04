@@ -24,6 +24,9 @@ var Presets = map[string]ProviderPreset{
 		DefaultURL:  "https://api.openai.com/v1",
 		EnvKeyNames: []string{"OPENAI_API_KEY"},
 	},
+	providerOpenAICompatible: {
+		Name: providerOpenAICompatible,
+	},
 	"groq": {
 		Name:        "groq",
 		DefaultURL:  "https://api.groq.com/openai/v1",
@@ -79,6 +82,9 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 	pType := strings.ToLower(strings.TrimSpace(providerType))
 
 	if preset, ok := Presets[pType]; ok {
+		if pType == providerOpenAICompatible && strings.TrimSpace(cfg.BaseURL) == "" {
+			return nil, xerr.Validation("llm: openai-compatible requires an explicit base URL")
+		}
 		if cfg.Name == "" {
 			cfg.Name = preset.Name
 		}

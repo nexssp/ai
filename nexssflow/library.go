@@ -17,7 +17,11 @@ import (
 
 const ID = "ai"
 
-const criticModule = "nflows/lib/critic.nflow"
+const (
+	criticModule   = "nflows/lib/critic.nflow"
+	weightsModule  = "nflows/lib/weights.nflow"
+	llamaCppModule = "nflows/lib/llama_cpp.nflow"
+)
 
 var acceptedOptions = []string{
 	"provider", "model", "api_key_env", "timeout", "base_url",
@@ -140,11 +144,12 @@ func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder,
 		newCostEstimateAction(),
 		newNFlowViewAction(),
 	}
+	actions = append(actions, newWeightActions()...)
 	actions = append(actions, newRetrievalActions(global, builder, service)...)
 	return compiler.Bundle{
 		ID:              ID,
 		SourceModules:   siaimodules.SourceModules,
-		ExportedModules: []string{criticModule},
+		ExportedModules: []string{criticModule, weightsModule, llamaCppModule},
 		AcceptedOptions: append([]string(nil), acceptedOptions...),
 		Libraries: []action.Library{{
 			Name:    "ai",

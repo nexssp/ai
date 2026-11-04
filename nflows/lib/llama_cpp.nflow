@@ -1,0 +1,20 @@
+@description "Run one local llama.cpp CLI generation through Flow's native external.exec action"
+@nflow_version ">=0.67.1"
+@schema LlamaCppEvaluationRequest {
+  llama_cli_path string `validate:"required"`
+  model_path string `validate:"required"`
+  prompt string `validate:"required"`
+  n_predict int `validate:"gte=1,lte=1024"`
+  temperature float64 `validate:"gte=0,lte=2"`
+}
+# This deliberately delegates process execution to Flow's native external.exec.
+# The supplied command is run directly (argv below), not through a shell.
+# external.exec is a privileged arbitrary-process capability; use trusted flows.
+@pipeline evaluate
+  :request-schema=!LlamaCppEvaluationRequest
+  {
+    cmd: .llama_cli_path,
+    args: ["-m", string(.model_path), "-p", string(.prompt), "-n", string(.n_predict), "--temp", string(.temperature), "--log-disable"]
+  }
+  -> external.exec
+@end

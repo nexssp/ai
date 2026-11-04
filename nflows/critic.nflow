@@ -1,8 +1,5 @@
 @description "Run the reusable ai JSON critic pipeline"
 @require ../ as ai {
-    provider: "openai",
-    model: "your-model-id",
-    api_key_env: "OPENAI_API_KEY",
     timeout: "30s"
 }
 @include ai:nflows/lib/critic.nflow AS critic

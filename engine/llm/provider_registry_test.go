@@ -73,3 +73,39 @@ func TestFetchModelsReturnsErrorInsteadOfFabricatedFallback(t *testing.T) {
 		t.Fatalf("unavailable catalog returned fabricated models: %v", models)
 	}
 }
+
+func TestOpenAICompatibleUsesConfiguredEndpoint(t *testing.T) {
+	if !IsKnownProvider(providerOpenAICompatible) {
+		t.Fatalf("provider %q is not in the public registry", providerOpenAICompatible)
+	}
+	if _, err := NewProvider(providerOpenAICompatible, Config{}); err == nil {
+		t.Fatal("generic provider accepted a missing base URL")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Errorf("request = %s %s, want GET /v1/models", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "caller-selected-model"}}})
+	}))
+	defer server.Close()
+
+	provider, err := NewProvider(providerOpenAICompatible, Config{BaseURL: server.URL + "/v1"})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if provider.Name() != providerOpenAICompatible {
+		t.Fatalf("provider name = %q, want %q", provider.Name(), providerOpenAICompatible)
+	}
+	models, err := FetchModels(context.Background(), providerOpenAICompatible, "", server.URL+"/v1")
+	if err != nil {
+		t.Fatalf("FetchModels: %v", err)
+	}
+	if len(models) != 1 || models[0] != "caller-selected-model" {
+		t.Fatalf("FetchModels = %v, want caller-selected model", models)
+	}
+	if _, err := FetchModels(context.Background(), providerOpenAICompatible, "", ""); err == nil {
+		t.Fatal("generic model discovery accepted a missing base URL")
+	}
+}

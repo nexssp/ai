@@ -14,11 +14,14 @@ go get github.com/nexssp/ai@main
 
 ## Quick start: call a model from Go
 
-Set the provider API key and an actual model ID supported by that account. Presets provide endpoints and credential environment names; they do not select a model.
+Choose any supported driver and model ID for your account or local server. `openai-compatible` is an optional driver for custom endpoints that implement the Chat Completions protocol.
 
 ```sh
-export OPENAI_API_KEY="your-api-key"
+export LLM_PROVIDER="your-provider-name"
 export LLM_MODEL="your-model-id"
+# Optional for services without a built-in endpoint or credential variable.
+export LLM_BASE_URL="https://your-endpoint.example/v1"
+export LLM_API_KEY="your-api-key"
 ```
 
 ```go
@@ -34,7 +37,9 @@ import (
 )
 
 func main() {
-    provider, err := llm.NewProvider("openai", llm.Config{
+    provider, err := llm.NewProvider(os.Getenv("LLM_PROVIDER"), llm.Config{
+        BaseURL:      os.Getenv("LLM_BASE_URL"),
+        APIKey:       os.Getenv("LLM_API_KEY"),
         DefaultModel: os.Getenv("LLM_MODEL"),
     })
     if err != nil {
@@ -64,7 +69,8 @@ A request can override its model and include messages, temperature, maximum toke
 | [`engine/llm`](engine/llm) | Provider interfaces and implementations, chat and streaming requests, model discovery, provider chains and routing helpers, structured decision DTOs, and externally configured cost estimates. |
 | [`gateway`](gateway) | An application-composable provider gateway with per-request route selection, pre-dispatch gates, and content-free outcome hooks. |
 | [`retrieval`](retrieval) | Namespace-scoped vector indexing/search and source-grounded RAG over an injected embedder and vector-index adapter. See the [retrieval guide](retrieval/README.md). |
-| [`nexssflow`](nexssflow) | A Nexss Flow v0.67.1+ bundle named `ai` with typed prompt/team/decision/cost/retrieval/RAG actions, a host-injected retrieval service, and [schema-backed examples](nflows/retrieval_rag.nflow). |
+| [`weights`](weights) | Workspace-confined inspection and checksum-bound scalar edits for single or indexed sharded SafeTensors and one GGUF file; no model-family validation, inference, WSP proposals, or evaluation. PyTorch pickle checkpoints are rejected. See the [weights guide](weights/README.md). |
+| [`nexssflow`](nexssflow) | A Nexss Flow v0.67.1+ bundle named `ai` with typed prompt/team/decision/cost/retrieval/RAG/weights actions, a host-injected retrieval service, and [schema-backed examples](nflows/retrieval_rag.nflow). |
 | [`memory`](memory) | A host-side hybrid conversation-memory service with bounded Redis working history and application-supplied long-term memory and LLM adapters. See the [memory guide](memory/README.md). |
 | [`extensions/ai_assist`](extensions/ai_assist) | An experimental placeholder bundle. Its asynchronous error-analysis hook is currently a TODO; it does not provide working model analysis yet. |
 
@@ -72,10 +78,10 @@ A request can override its model and include messages, temperature, maximum toke
 
 `llm.NewProvider` supports these provider names and aliases:
 
-- **OpenAI-compatible chat APIs:** `openai`, `groq`, `nvidia`, `nim`, `deepseek`, `openrouter`, `lmstudio`, `vllm`, `xai`, and `inception`.
+- **OpenAI-compatible chat APIs:** `openai-compatible`, `openai`, `groq`, `nvidia`, `nim`, `deepseek`, `openrouter`, `lmstudio`, `vllm`, `xai`, and `inception`.
 - **Provider-specific APIs:** `anthropic` / `claude`, `gemini` / `google`, and `ollama` / `ollama_cloud`.
 
-Presets contain endpoints and credential environment names only. Model IDs are supplied by the caller or provider configuration, or fetched from a live provider catalog. If discovery is unavailable, the library returns an error rather than inventing a fallback model. Credentials are read from the corresponding environment variables when available: `OPENAI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY` (also `NVIDIA_NIM_API_KEY` or `NVCF_API_KEY`), `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` (also `OPENROUTER_KEY`), `LMSTUDIO_API_KEY`, `VLLM_API_KEY`, `XAI_API_KEY`, `INCEPTION_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY`. Ollama can be used locally without an API key. Override preset endpoints with `llm.Config.BaseURL` and consult the provider for model names and API compatibility.
+Presets contain endpoints and credential environment names only. Model IDs are supplied by the caller or provider configuration, or fetched from a live provider catalog. If discovery is unavailable, the library returns an error rather than inventing a fallback model. `openai-compatible` has no preset endpoint or vendor-specific credential name: supply `BaseURL` and `APIKey` yourself. Named drivers can use their documented credential environment variables; Ollama can be used locally without an API key. Override preset endpoints with `llm.Config.BaseURL` and consult the selected service for model names and API compatibility.
 
 ### Decision-capable models and providers
 
@@ -107,12 +113,6 @@ The Flow bundle is provided by `github.com/nexssp/ai/nexssflow`. In a workflow, 
 
 ```nflow
 @require github.com/nexssp/ai main as ai {
-    provider: "openai",
-    model: "your-model-id",
-    api_key_env: "OPENAI_API_KEY",
-    decision_provider: "inception-chat",
-    decision_model: "your-decision-chat-model-id",
-    decision_api_key_env: "INCEPTION_API_KEY",
     timeout: "30s"
 }
 
@@ -123,7 +123,9 @@ The Flow bundle is provided by `github.com/nexssp/ai/nexssflow`. In a workflow, 
 } -> ai.prompt
 ```
 
-`api_key_env` and `decision_api_key_env` are **environment-variable names**, not secret values. The Flow bundle accepts `provider`, `model`, `api_key_env`, `timeout`, `base_url`, `decision_provider`, `decision_model`, `decision_api_key_env`, and `decision_base_url` as `@require` options. The normal chat model and decision model are selected independently; there is no implicit candidate-model fallback. The default provider is OpenAI and the default timeout is 60 seconds, but no default model is selected. `base_url` must be an absolute HTTP(S) URL. You can also use a local requirement while developing in this checkout; included workflows use `@require ../` from the `nflows/` directory. The Flow runtime or CLI is separate from this Go module.
+`api_key_env` and `decision_api_key_env` are **environment-variable names**, not secret values. The Flow bundle accepts `provider`, `model`, `api_key_env`, `timeout`, `base_url`, `decision_provider`, `decision_model`, `decision_api_key_env`, and `decision_base_url` as `@require` options. For environment-based setup, set `LLM_PROVIDER` to any supported provider name and `LLM_MODEL` to a model available through it. `LLM_BASE_URL` and `LLM_API_KEY` optionally override endpoint and credential; named providers can also use their usual credential variables. `LLM_API_KEY_ENV` can name another variable containing the key. Explicit per-call values override `@require`, which overrides environment values. A provider must be selected—there is no hidden vendor default. Configure `LLM_DECISION_PROVIDER` and `LLM_DECISION_MODEL` independently for decisions; `ai.decide` is available only through drivers with the structured/native or supported JSON-mode capability it needs. `LLM_DECISION_BASE_URL` can override that endpoint. There is no implicit candidate-model fallback. `base_url` must be an absolute HTTP(S) URL. You can also use a local requirement while developing in this checkout; included workflows use `@require ../` from the `nflows/` directory. The Flow runtime or CLI is separate from this Go module.
+
+To route across several configured providers/models, inject the existing [`gateway`](gateway) through `nexssflow.NewBundleWithProviderBuilder`; the application owns its route table, selector, gates, and any fallback policy. The `gateway` package does not choose a vendor or model by itself.
 
 ### Typed Flow actions
 
@@ -155,6 +157,10 @@ The `memory` package is a host-side service, not a `.nflow` bundle. It combines 
 ## Vector retrieval and RAG
 
 The `retrieval` package adds deterministic character-based chunking, batched embedding, namespace-scoped vector search, document replacement/deletion, and a basic RAG answer flow using any `llm.Provider` or the AI gateway. `retrieval.VectorIndex` is an AI-owned adapter boundary; generic persistence stays in `nexssp/storage`. The included `MemoryIndex` is for tests and local demos only—there is no persistent vector database adapter, reranker, or token-aware chunker in this increment. The answer prompt treats passages as untrusted data and returns the exact source chunks supplied to the model; model-generated citations are not independently validated. See the [retrieval guide](retrieval/README.md).
+
+## Checkpoint weight editing
+
+The `weights` package and `ai.weights.*` NFlow actions provide bounded file editing for single or standard indexed-sharded SafeTensors and one little-endian GGUF v2/v3 file. They inspect tensor metadata, optionally hash/sample supported floats, and apply caller-supplied scalar deltas to new outputs. SafeTensors supports F16, BF16, F32, and F64 edits; GGUF supports those same float types, validates recognized fixed/block layouts, and preserves quantized blocks without editing or dequantizing them. GGUF split files and PyTorch `.pt`/`.pth`/`.bin` checkpoints are not supported; PyTorch's pickle-based object graph is rejected rather than executed. Inputs and outputs are confined to the process working directory through Nexss `kernel/xfs`; patching requires the exact inspected source digest and never overwrites a source member. Model IDs are opaque labels and there is no model-name branching. The exported [`llama_cpp` NFlow helper](nflows/lib/llama_cpp.nflow) uses Flow's existing privileged `external.exec` action to run a locally managed `llama-cli` and compare baseline/candidate outputs; it downloads no executable or model and makes no quality claim. This remains **a bounded editing primitive plus a local smoke-evaluation path, not a general Weight-Space Programming optimizer**. See the [weights guide](weights/README.md), [standalone inspection workflow](nflows/weights_inspect.nflow), and [NFlow modules](nflows/lib/weights.nflow).
 
 ## Development
 

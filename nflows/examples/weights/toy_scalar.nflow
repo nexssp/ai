@@ -1,0 +1,45 @@
+@description "Toy 1: one SafeTensors float scalar"
+@require ../../.. as ai {
+    timeout: "30s"
+}
+@include ai:nflows/lib/weights.nflow AS weights
+# Supply a workspace-relative checkpoint, a distinct versioned output path, and
+# caller-verified coordinates/values. This flow proposes a candidate, not a release.
+@pipeline toy_scalar
+    {model: .model, include_sha256: true, sample_elements: 4}
+    -> weights.pipeline.inspect
+    -> ai.nflow.view as inspection
+    -> {
+        attempt_id: "toy-scalar-edit",
+        max_output_tokens: 48,
+        state: {
+            scenario: "Toy example: choose whether to nudge one caller-identified SafeTensors scalar by a fixed tiny amount.",
+            evidence: input.evidence,
+            target_coordinate: input.coordinate,
+            current_value: input.current_value,
+            inspected_source_sha256: inspection.sha256
+        },
+        allowed_ids: ["hold", "apply"],
+        questions: [{
+            id: "edit_plan",
+            type: "choice",
+            instructions: "Choose only a listed plan from the supplied evidence; otherwise choose hold.",
+            criteria: [{id: "hold", description: "Make no change"}, {id: "apply", description: "Apply the fixed +0.0001 candidate"}]
+        }]
+    }
+    -> ai.decide
+    -> ai.nflow.view as decision
+    -> match {
+        decision.answers[0].choice == "hold" -> const @{status: "held", output_written: false},
+        decision.answers[0].choice == "apply" -> {
+            model: input.model,
+            output_path: input.output_path,
+            source_sha256: inspection.sha256,
+            edits: [{tensor: input.coordinate.tensor, index: input.coordinate.index, delta: 0.0001, expected_value: input.current_value}],
+            overwrite: false
+        } -> weights.pipeline.patch -> ai.nflow.view as patch_result
+        -> const @{status: "toy_copy_written", choice: "apply", output_written: true, result: .patch_result},
+        _ -> const @{status: "manual_review", output_written: false}
+    }
+@end
+pipeline.toy_scalar

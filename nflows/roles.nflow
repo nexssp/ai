@@ -1,8 +1,5 @@
 @description "Two temporary role agents share findings during one Flow run"
 @require ../ {
-    provider: "openai",
-    model: "local-fake-model",
-    api_key_env: "SI_AI_TEST_PROVIDER_KEY",
     timeout: "10s"
 }
 @assert result.content != ""

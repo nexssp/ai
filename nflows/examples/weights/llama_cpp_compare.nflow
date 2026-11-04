@@ -1,0 +1,35 @@
+@description "Compare baseline and candidate GGUF generations with local llama.cpp; review outputs manually"
+@require ../../../ as ai
+@include ai:nflows/lib/llama_cpp.nflow AS llama_cpp
+@schema LlamaCppCompareRequest {
+  llama_cli_path string `validate:"required"`
+  baseline_model_path string `validate:"required"`
+  candidate_model_path string `validate:"required"`
+  prompt string `validate:"required"`
+  n_predict int `validate:"gte=1,lte=1024"`
+  temperature float64 `validate:"gte=0,lte=2"`
+}
+@pipeline compare_one_prompt
+  :request-schema=!LlamaCppCompareRequest
+  {
+    llama_cli_path: .llama_cli_path,
+    model_path: .baseline_model_path,
+    prompt: .prompt,
+    n_predict: .n_predict,
+    temperature: .temperature
+  } -> llama_cpp.pipeline.evaluate as baseline
+  -> {
+    llama_cli_path: input.llama_cli_path,
+    model_path: input.candidate_model_path,
+    prompt: input.prompt,
+    n_predict: input.n_predict,
+    temperature: input.temperature
+  } -> llama_cpp.pipeline.evaluate as candidate
+  -> {
+    prompt: input.prompt,
+    baseline: {stdout: baseline.Stdout, stderr: baseline.Stderr, exit_code: baseline.ExitCode},
+    candidate: {stdout: candidate.Stdout, stderr: candidate.Stderr, exit_code: candidate.ExitCode},
+    interpretation: "Raw outputs for manual review; this workflow does not score quality or claim improvement."
+  }
+@end
+pipeline.compare_one_prompt

@@ -1,0 +1,53 @@
+@description "Practical weekly support-ticket triage calibration candidate"
+@require ../../.. as ai {
+    timeout: "30s"
+}
+@include ai:nflows/lib/weights.nflow AS weights
+# Supply a workspace-relative checkpoint, a distinct versioned output path, and
+# caller-verified coordinates/values. This flow proposes a candidate, not a release.
+@pipeline weekly_candidate
+    {model: .model, include_sha256: true, sample_elements: 4}
+    -> weights.pipeline.inspect
+    -> ai.nflow.view as inspection
+    -> {
+        attempt_id: "support-triage-weekly-review",
+        max_output_tokens: 48,
+        state: {
+            scenario: "Weekly human-reviewed calibration candidate for a support-ticket urgency score. Use validation data only; never provide holdout examples.",
+            validation_evidence: input.validation_evidence,
+            target_coordinate: input.coordinate,
+            current_value: input.current_value,
+            inspected_source_sha256: inspection.sha256
+        },
+        allowed_ids: ["hold", "small_positive", "small_negative"],
+        questions: [{
+            id: "edit_plan",
+            type: "choice",
+            instructions: "Choose only a listed plan from the supplied evidence; otherwise choose hold.",
+            criteria: [{id: "hold", description: "Keep the baseline; evidence does not justify a change"}, {id: "small_positive", description: "Try the fixed +0.0001 candidate"}, {id: "small_negative", description: "Try the fixed -0.0001 candidate"}]
+        }]
+    }
+    -> ai.decide
+    -> ai.nflow.view as decision
+    -> match {
+        decision.answers[0].choice == "hold" -> const @{status: "held_for_human_review", output_written: false},
+        decision.answers[0].choice == "small_positive" -> {
+            model: input.model,
+            output_path: input.output_path,
+            source_sha256: inspection.sha256,
+            edits: [{tensor: input.coordinate.tensor, index: input.coordinate.index, delta: 0.0001, expected_value: input.current_value}],
+            overwrite: false
+        } -> weights.pipeline.patch -> ai.nflow.view as patch_result
+        -> const @{status: "human_review_candidate", choice: "small_positive", output_written: true, result: .patch_result},
+        decision.answers[0].choice == "small_negative" -> {
+            model: input.model,
+            output_path: input.output_path,
+            source_sha256: inspection.sha256,
+            edits: [{tensor: input.coordinate.tensor, index: input.coordinate.index, delta: -0.0001, expected_value: input.current_value}],
+            overwrite: false
+        } -> weights.pipeline.patch -> ai.nflow.view as patch_result
+        -> const @{status: "human_review_candidate", choice: "small_negative", output_written: true, result: .patch_result},
+        _ -> const @{status: "manual_review", output_written: false}
+    }
+@end
+pipeline.weekly_candidate
