@@ -1,0 +1,42 @@
+@description "Three named Groq LLM handles talk through an analyst, critic, and synthesizer"
+# This example is for trusted workflows only: @llm selects host environment keys and may select endpoints.
+# Shared or untrusted execution requires host-side secret isolation and credential/endpoint allowlisting.
+@require github.com/nexssp/ai main as ai
+
+@llm analyst {
+    provider: "groq",
+    model: "llama-3.3-70b-versatile",
+    api_key_env: "GROQ_ANALYST_API_KEY"
+}
+@llm critic {
+    provider: "groq",
+    model: "llama-3.3-70b-versatile",
+    api_key_env: "GROQ_CRITIC_API_KEY"
+}
+@llm synthesizer {
+    provider: "groq",
+    model: "llama-3.3-70b-versatile",
+    api_key_env: "GROQ_SYNTHESIZER_API_KEY"
+}
+
+@assert result.content != ""
+@assert result.provider == "groq"
+
+{
+    user: .task,
+    system: "You are the analyst. Give a concise first answer and state the main trade-off.",
+    max_tokens: 180,
+    temperature: 0.2
+} -> llm.analyst as analysis
+-> {
+    user: "Review the analyst's answer, identify one weakness, and improve it:\n\n" + analysis.Content,
+    system: "You are the critic. Build on the previous answer rather than starting over.",
+    max_tokens: 180,
+    temperature: 0.2
+} -> llm.critic as critique
+-> {
+    user: "Synthesize the analysis and critique into one balanced final answer.\n\nAnalyst: " + analysis.Content + "\n\nCritic: " + critique.Content,
+    system: "You are the synthesizer. Produce one concise final answer that preserves important caveats.",
+    max_tokens: 180,
+    temperature: 0.2
+} -> llm.synthesizer

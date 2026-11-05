@@ -21,7 +21,7 @@ func newPromptAction(global GlobalOptions) action.AnyAction {
 }
 
 // newPromptActionWith keeps provider construction injectable for deterministic tests.
-func newPromptActionWith(global GlobalOptions, build providerBuilder) action.AnyAction {
+func newPromptActionWith(global GlobalOptions, build providerBuilder) *action.BuiltAction[PromptRequest, PromptResult] {
 	return action.New[PromptRequest, PromptResult]("ai.prompt", func(ctx context.Context, req PromptRequest) (PromptResult, error) {
 		if err := validateUser(req.User); err != nil {
 			return PromptResult{}, err

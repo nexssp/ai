@@ -69,10 +69,10 @@ func Bundle(raw map[string]string) compiler.Bundle {
 	return bundleWithBuilder(global, builder)
 }
 
-// NewBundleWithProviderBuilder creates an AI Flow bundle whose prompt and team
-// actions use a host-supplied provider builder. Hosts can use it to inject a
-// gateway while retaining the standard typed actions and default decision
-// provider builder.
+// NewBundleWithProviderBuilder creates an AI Flow bundle whose prompt, team,
+// and named LLM actions use a host-supplied provider builder. Hosts can use it
+// to inject a gateway while retaining the standard typed actions and default
+// decision provider builder.
 func NewBundleWithProviderBuilder(global GlobalOptions, builder ProviderBuilder) (compiler.Bundle, error) {
 	if builder == nil {
 		return compiler.Bundle{}, xerr.Validation("ai: provider builder is required")
@@ -151,6 +151,8 @@ func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder,
 		SourceModules:   siaimodules.SourceModules,
 		ExportedModules: []string{criticModule, weightsModule, llamaCppModule},
 		AcceptedOptions: append([]string(nil), acceptedOptions...),
+		Directives:      []compiler.Directive{namedLLMDirective},
+		Materialize:     namedLLMMaterializer(global, builder),
 		Libraries: []action.Library{{
 			Name:    "ai",
 			Actions: actions,
