@@ -24,6 +24,10 @@ Declare reusable prompt actions directly in NFlow with `@llm NAME { provider: ".
 
 Treat `@llm` declarations as trusted-workflow configuration: the workflow selects an environment-variable name and may select a `base_url`, so an untrusted workflow author could direct an available secret to an attacker-controlled endpoint. This package does not enforce an allowlist of accessible secrets or destinations. Shared or untrusted execution requires host-side secret isolation and allowlisting of permitted credentials and endpoints; do not expose broad process environment secrets to those workflows.
 
+### Local Qwen3.5 through an OpenAI-compatible provider
+
+[`examples/qwen35_openai_compatible.nflow`](examples/qwen35_openai_compatible.nflow) uses the named `@llm` mechanism with `provider: "openai-compatible"`; it does not add a Qwen-specific provider. It pins [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) to immutable revision `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, downloads that revision locally, and targets a loopback vLLM Chat Completions endpoint. The workflow's served model alias, endpoint, timeout, and optional credential environment-variable name are configurable. No model files or live service are needed by the example's fake-provider integration test.
+
 `ai.decide` requires a positive `max_output_tokens` cap. Anthropic's official Structured Outputs API (`decision_provider: "anthropic"`) receives the cap in `max_tokens` and a typed JSON Schema in `output_config.format`. OpenAI, Gemini, xAI, DeepSeek, and Inception chat (`decision_provider: "inception-chat"`) use locally validated JSON-mode adapters; the cap is sent using each provider's documented field, and reported output usage above the cap is rejected. The documented Inception native `/v1/decisions` and TypeSafe `/v1/systemone` request schemas expose no provider-enforced output cap, so those native adapters fail closed before HTTP dispatch. JSON mode is not claimed to be equivalent to a native decision endpoint or schema-constrained output. Unverified provider names are rejected rather than silently adapted.
 
 The decision action validates the candidate allowlist and returns a typed `DecisionResponse` with ordered `[]DecisionAnswer`; NFlow owns the routing graph and branch behavior. See [`decision_route.nflow`](decision_route.nflow) for a working `match` example. NFlow `@schema` field names are declared in snake_case and used directly without `json` tags. The workflow uses `ai.nflow.view` only after typed action outputs, then branches on `decision_result.answers[0].choice`. `ai.cost.estimate` uses `max_output_tokens` as the nested decision's completion-cost basis, but it does not bill, reserve, or authorize selector spend. The application host guard must approve and reserve cost before provider dispatch.
@@ -46,6 +50,31 @@ if err != nil {
 ```
 
 [`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.67.1` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
+
+## Conversation memory and host-approved skills
+
+The [`memory_skills_route.nflow`](memory_skills_route.nflow) example routes requests among `ai.memory.reply`, `ai.skills.get` plus `ai.prompt`, and `ai.skills.draft`. The NFlow `@symbols` keep route/scope labels finite, same-name projections pass typed fields without repeating source/target names, and the memory error handler uses `.input.user_id` to preserve the original routed identity.
+
+Memory working history always stays scoped to both `user_id` and `conversation_id`. The explicit `memory_scope` field controls only long-term recall/promotion: `conversation` stays in that conversation, while `user` is shared across that user's conversations. Omission preserves the legacy conversation-scoped behavior. The host must set both identity fields from authenticated session state; the long-term adapter must honor `UserID`, with user-scoped calls receiving an empty `ConversationID`.
+
+Create the skills catalog at startup and inject it with the memory service. Approved skills are top-level `<lowercase-name>.md` files from a host-selected directory, loaded as plain instruction text with a bounded count and size. `ai.skills.get` and `ai.skills.list` see only that immutable startup snapshot. `ai.skills.draft` validates the name, text, UTF-8 and size, then writes inert JSON into a separate draft directory; it cannot edit the active catalog or activate itself. A host operator must review a draft, deliberately install approved content in the active directory, and reload the catalog. Skill text is never executed by this package.
+
+```go
+catalog, err := skills.New(skills.Config{
+    Directory:      "./skills/approved",
+    DraftDirectory: "./skills/drafts",
+})
+if err != nil {
+    return err
+}
+bundle, err := nexssflow.NewBundleWithHostServices(globalOptions, providerBuilder, nexssflow.HostServices{
+    Retrieval: retrievalService,
+    Memory:    memoryService, // host-owned stores and an explicit completer
+    Skills:    catalog,
+})
+```
+
+See [`../memory/README.md`](../memory/README.md) for scope-aware backend contracts and [`../skills`](../skills) for loader behavior and tests. This host-service injection does not create provider credentials or storage adapters for the application.
 
 ## Checkpoint weights (bounded adapter)
 

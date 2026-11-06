@@ -2,7 +2,7 @@
 
 Reusable Go packages for LLM providers, Nexss Flow workflows, and host-integrated conversation memory.
 
-The repository is the Go module [`github.com/nexssp/ai`](https://github.com/nexssp/ai). The current source is on `main`; no release tag is assumed here. Until a release is published, Go consumers can select the branch with `@main` (or pin a commit for reproducible builds).
+The repository is the Go module [`github.com/nexssp/ai`](https://github.com/nexssp/ai). Select a release tag or branch explicitly in Go dependencies and NFlow `@require` declarations; pin a commit when you need a reproducible source snapshot.
 
 ## Install
 
@@ -70,8 +70,9 @@ A request can override its model and include messages, temperature, maximum toke
 | [`gateway`](gateway) | An application-composable provider gateway with per-request route selection, pre-dispatch gates, and content-free outcome hooks. |
 | [`retrieval`](retrieval) | Namespace-scoped vector indexing/search and source-grounded RAG over an injected embedder and vector-index adapter. See the [retrieval guide](retrieval/README.md). |
 | [`weights`](weights) | Workspace-confined inspection and checksum-bound scalar edits for single or indexed sharded SafeTensors and one GGUF file; no model-family validation, inference, WSP proposals, or evaluation. PyTorch pickle checkpoints are rejected. See the [weights guide](weights/README.md). |
-| [`nexssflow`](nexssflow) | A Nexss Flow v0.67.1+ bundle named `ai` with typed prompt/team/decision/cost/retrieval/RAG/weights actions, a host-injected retrieval service, and [schema-backed examples](nflows/retrieval_rag.nflow). |
-| [`memory`](memory) | A host-side hybrid conversation-memory service with bounded Redis working history and application-supplied long-term memory and LLM adapters. See the [memory guide](memory/README.md). |
+| [`nexssflow`](nexssflow) | A Nexss Flow v0.67.1+ bundle named `ai` with typed prompt/team/decision/cost/retrieval/RAG/weights, memory, and skills actions; host services are injected by the application. See the [NFlow guide](nflows/README.md). |
+| [`memory`](memory) | A host-side hybrid conversation-memory service with bounded Redis working history and application-supplied long-term memory and LLM adapters. Long-term `memory_scope` is explicit (`conversation` or `user`). See the [memory guide](memory/README.md). |
+| [`skills`](skills) | A bounded host-approved Markdown catalog plus validated, inert JSON drafts that require separate host review and activation. See the [skills guide](skills/README.md). |
 | [`extensions/ai_assist`](extensions/ai_assist) | An experimental placeholder bundle. Its asynchronous error-analysis hook is currently a TODO; it does not provide working model analysis yet. |
 
 ### Providers and models

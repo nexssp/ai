@@ -12,7 +12,9 @@ import (
 
 	siaimodules "github.com/nexssp/ai"
 	"github.com/nexssp/ai/engine/llm"
+	"github.com/nexssp/ai/memory"
 	"github.com/nexssp/ai/retrieval"
+	"github.com/nexssp/ai/skills"
 )
 
 const ID = "ai"
@@ -43,6 +45,14 @@ type GlobalOptions struct {
 	DecisionModel     string
 	DecisionProvider  string
 	DecisionBaseURL   string
+}
+
+// HostServices contains host-owned runtime integrations exposed to NFlow.
+// Skills are read from a host-approved directory; generated drafts remain inert.
+type HostServices struct {
+	Retrieval *retrieval.Service
+	Memory    *memory.Service
+	Skills    *skills.Catalog
 }
 
 // LLMDecl contains the per-call values accepted by ai.prompt.
@@ -91,7 +101,17 @@ func NewBundleWithServices(global GlobalOptions, builder ProviderBuilder, servic
 	if service == nil {
 		return compiler.Bundle{}, xerr.Validation("ai: retrieval service is required")
 	}
-	return bundleWithServices(global, builder, service), nil
+	return bundleWithHostServices(global, builder, HostServices{Retrieval: service}), nil
+}
+
+// NewBundleWithHostServices creates a Flow bundle with host-owned retrieval,
+// conversation-memory, and approved-skills integrations. Only the provider
+// builder is required; actions for services not supplied fail closed at runtime.
+func NewBundleWithHostServices(global GlobalOptions, builder ProviderBuilder, services HostServices) (compiler.Bundle, error) {
+	if builder == nil {
+		return compiler.Bundle{}, xerr.Validation("ai: provider builder is required")
+	}
+	return bundleWithHostServices(global, builder, services), nil
 }
 
 func options(raw map[string]string) (GlobalOptions, error) {
@@ -125,18 +145,18 @@ func options(raw map[string]string) (GlobalOptions, error) {
 }
 
 func bundleWithBuilder(global GlobalOptions, builder providerBuilder) compiler.Bundle {
-	return bundleWithServices(global, builder, nil)
+	return bundleWithHostServices(global, builder, HostServices{})
 }
 
 func bundleWithBuilders(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder) compiler.Bundle {
-	return bundleWithBuilderAndServices(global, builder, decisions, nil)
+	return bundleWithBuilderAndServices(global, builder, decisions, HostServices{})
 }
 
-func bundleWithServices(global GlobalOptions, builder providerBuilder, service *retrieval.Service) compiler.Bundle {
-	return bundleWithBuilderAndServices(global, builder, buildDecisionProvider, service)
+func bundleWithHostServices(global GlobalOptions, builder providerBuilder, services HostServices) compiler.Bundle {
+	return bundleWithBuilderAndServices(global, builder, buildDecisionProvider, services)
 }
 
-func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder, service *retrieval.Service) compiler.Bundle {
+func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder, decisions decisionProviderBuilder, services HostServices) compiler.Bundle {
 	actions := []action.AnyAction{
 		newPromptActionWith(global, builder),
 		newTeamActionWith(global, builder),
@@ -145,7 +165,8 @@ func bundleWithBuilderAndServices(global GlobalOptions, builder providerBuilder,
 		newNFlowViewAction(),
 	}
 	actions = append(actions, newWeightActions()...)
-	actions = append(actions, newRetrievalActions(global, builder, service)...)
+	actions = append(actions, newRetrievalActions(global, builder, services.Retrieval)...)
+	actions = append(actions, newMemorySkillActions(services.Memory, services.Skills)...)
 	return compiler.Bundle{
 		ID:              ID,
 		SourceModules:   siaimodules.SourceModules,

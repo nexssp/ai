@@ -1,12 +1,21 @@
 # Hybrid conversation memory
 
-The `memory` package is a host-side Go service for applications built with Flow. It combines a bounded Redis working history with an injected long-term semantic store and a model completer. It is deliberately not a `.nflow` DSL bundle: the host owns the LLM and storage connections and supplies them when constructing the service.
+The `memory` package is a host-side Go service for applications built with Flow. It combines bounded Redis working history with an injected long-term semantic store and a configured model completer. The host owns all storage and provider connections; this package is not itself a `.nflow` bundle.
+
+## Choose `memory_scope` explicitly
+
+Every request identifies both the authenticated `UserID` and active `ConversationID`. Recent working history always uses both IDs and therefore never crosses conversations. `Scope.MemoryScope` selects the destination for long-term recall and promotion:
+
+- `conversation` stores and recalls durable memories for this user in this conversation only.
+- `user` stores and recalls durable memories for this user across their conversations. The `LongTermStore` receives that user ID with an empty conversation ID, so the adapter must enforce user isolation.
+
+An omitted `memory_scope` remains the backward-compatible `conversation` behavior. Set user and conversation IDs from trusted host/session identity—not from untrusted model output. User-scoped memory is still private to one user; it is not global across users.
 
 ## Request flow
 
-For each incoming message, `Service.Reply` validates the user/conversation scope, reads the latest configured number of turns, searches long-term memory with the current message, assembles the system prompt + retrieved memories + recent turns + current user message, and calls the supplied completer. After a successful completion it appends the user/assistant exchange to working memory. An explicit `Remember` flag or an importance score at/above the configured threshold immediately upserts the exchange into long-term memory.
+For each incoming message, `Service.Reply` validates the full conversation identity and memory scope, reads recent turns using the conversation-only scope, searches long-term memory using the requested `memory_scope`, assembles the prompt, and calls the supplied completer. After successful completion it appends the exchange to conversation-local working history. Explicit `Remember` or an importance score at/above the configured threshold upserts the exchange into the requested long-term scope.
 
-The default importance scorer is a small configurable keyword matcher; it is a transparent baseline, not a claim of semantic importance detection. Hosts can inject a classifier or model-backed `ImportanceScorer`. A custom `ShouldRecall` policy can skip long-term search for messages that do not need it. Retrieved memories are added in a separate system message and explicitly labeled as untrusted reference data.
+The default importance scorer is a small configurable keyword matcher; it is a transparent baseline, not a claim of semantic importance detection. Hosts can inject a classifier or model-backed `ImportanceScorer`. A custom `ShouldRecall` policy can skip long-term search. Retrieved memories are added in a separate system message and labeled as untrusted reference data.
 
 ## Example
 
@@ -32,7 +41,11 @@ if err != nil {
 }
 
 reply, err := service.Reply(ctx, memory.Request{
-    Scope:       memory.Scope{UserID: userID, ConversationID: conversationID},
+    Scope: memory.Scope{
+        UserID:         authenticatedUserID,
+        ConversationID: activeConversationID,
+        MemoryScope:    memory.MemoryScopeUser, // or MemoryScopeConversation
+    },
     UserMessage: text,
 })
 ```
@@ -41,11 +54,11 @@ reply, err := service.Reply(ctx, memory.Request{
 
 `WorkingStore` is implemented by `RedisWorkingStore`. Keys are derived from both user and conversation IDs, Redis list updates and retention trimming run in a transaction, and history is bounded (256 turns by default). The caller owns the Redis client lifecycle.
 
-`LongTermStore` defines `Search(scope, query, limit)` and idempotent `Upsert(record)` operations. The full scope is passed on every call so adapters can keep users and conversations isolated. LEANN can be integrated behind this interface, but there is no LEANN adapter in this package: the upstream project currently documents Python APIs and a CLI, not a stable Go or HTTP service contract. Implement the adapter against the LEANN runtime/version actually deployed rather than relying on a guessed wire format.
+`LongTermStore` defines `Search(scope, query, limit)` and idempotent `Upsert(record)` operations. It receives an explicit `MemoryScope`; for user scope, `ConversationID` is empty, while conversation scope includes both IDs. LEANN can be integrated behind this interface, but there is no LEANN adapter in this package: implement the adapter against the LEANN runtime/version actually deployed rather than relying on a guessed wire format.
 
 ## Background promotion
 
-A host scheduler may call `PromoteOlder` for each active scope with a cutoff and batch limit. The service upserts each aged turn using its stable turn ID, then removes only those IDs from Redis. If a write succeeds but deletion fails, a retry is safe provided the long-term adapter honors idempotent upsert-by-ID. This package does not own a scheduler or discover active scopes; the application does.
+A host scheduler may call `PromoteOlder` for each active conversation with a cutoff and batch limit. The service reads and deletes working turns using both user and conversation IDs, and uses each turn's recorded `memory_scope` when promoting it. Upserts use stable turn IDs, so retrying after an upsert succeeds but deletion fails is safe provided the long-term adapter honors idempotent upsert-by-ID. This package does not own a scheduler or discover active scopes; the application does.
 
 ## Failure behavior
 

@@ -2,6 +2,8 @@
 
 `github.com/nexssp/ai/weights` provides a bounded local file-editing primitive. It inspects tensor metadata and can add caller-supplied scalar deltas to a checksum-verified copy. It does **not** load a model, infer architecture, run inference, generate edits, or evaluate behavior. A tensor-level edit is not evidence of compatibility or usefulness.
 
+LLM provider configuration (Go `engine/llm`, NFlow `@require`, or named `@llm`) is a separate inference path: it selects a provider, model, and optional endpoint for prompts. The weights package does not select or call that provider; it edits local checkpoint bytes deterministically from the caller's exact adapter, checksum, and delta list.
+
 Callers choose the exact `model_id` label, `format`, `adapter`, and workspace-relative `path`. Model IDs are opaque labels, not registry lookups or proof of compatibility. Paths are opened through Nexss `kernel/xfs`, confined to the process working directory, and cannot escape through absolute paths or symlinks. Run from a workspace where the intended files are available.
 
 ## What works

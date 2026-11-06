@@ -1,0 +1,107 @@
+@description "Route a request to conversation/user memory, a host-approved skill, or an inert skill draft"
+@nflow_version ">=0.67.1"
+@require ../ as ai {
+    timeout: "30s"
+}
+
+@symbols routes {
+    memory: "memory"
+    skill: "skill"
+    draft: "draft"
+}
+
+@symbols memory_scopes {
+    conversation: "conversation"
+    user: "user"
+}
+
+@symbols outcomes {
+    unknown_route: "unknown_route"
+    memory_unavailable: "memory_unavailable"
+}
+
+@schema MemorySkillsRequest {
+    route string `validate:"required,oneof=memory skill draft"`
+    user_id string
+    conversation_id string
+    memory_scope string `validate:"omitempty,oneof=conversation user"`
+    user_message string
+    remember bool
+    skill_name string
+    draft_name string
+    draft_instructions string
+}
+
+@pipeline reply_with_memory
+    {
+        .user_id,
+        .conversation_id,
+        .memory_scope,
+        .user_message,
+        .remember
+    }
+    -> match {
+        .memory_scope == memory_scopes.user -> {
+            scope: { .user_id, .conversation_id, memory_scope: memory_scopes.user },
+            .user_message,
+            .remember
+        },
+        _ -> {
+            scope: { .user_id, .conversation_id, memory_scope: memory_scopes.conversation },
+            .user_message,
+            .remember
+        }
+    }
+    -> ai.memory.reply
+    ? on_error {
+        xerr.KindUnavailable -> {status: outcomes.memory_unavailable, user_id: .input.user_id},
+        else -> error.reraise
+    }
+@end
+
+@pipeline reply_with_skill
+    {
+        .skill_name,
+        .user_message
+    }
+    -> {name: .skill_name}
+    -> ai.skills.get
+    -> ai.nflow.view
+    -> {
+        system: .instructions,
+        user: input.user_message,
+        max_tokens: 160
+    }
+    -> ai.prompt
+@end
+
+@pipeline propose_skill
+    {
+        name: .draft_name,
+        instructions: .draft_instructions
+    }
+    -> ai.skills.draft
+@end
+
+@pipeline route_request
+    :request-schema=!MemorySkillsRequest
+    {
+        .route,
+        .user_id,
+        .conversation_id,
+        .memory_scope,
+        .user_message,
+        .remember,
+        .skill_name,
+        .draft_name,
+        .draft_instructions
+    }
+    -> match {
+        .route == routes.memory -> pipeline.reply_with_memory,
+        .route == routes.skill -> pipeline.reply_with_skill,
+        .route == routes.draft -> pipeline.propose_skill,
+        _ -> const @{status: outcomes.unknown_route, route: .route}
+    }
+@end
+
+pipeline.route_request

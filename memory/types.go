@@ -14,11 +14,25 @@ import (
 	"time"
 )
 
-// Scope is the isolation boundary for conversation and durable memory.
-// Backends must use both fields when reading, searching, writing, and deleting.
+// Level selects where durable memories are shared. Working history always
+// remains isolated to the active user/conversation pair.
+type Level string
+
+const (
+	// MemoryScopeConversation keeps durable memories within one conversation.
+	MemoryScopeConversation Level = "conversation"
+	// MemoryScopeUser shares durable memories across the user's conversations.
+	MemoryScopeUser Level = "user"
+)
+
+// Scope identifies the active conversation and the destination for durable memory.
+// Backends must honor UserID in both modes. For user-scoped long-term operations,
+// Service clears ConversationID before calling LongTermStore. An empty MemoryScope
+// remains the legacy spelling of MemoryScopeConversation.
 type Scope struct {
 	UserID         string `json:"user_id"`
 	ConversationID string `json:"conversation_id"`
+	MemoryScope    Level  `json:"memory_scope,omitempty"`
 }
 
 // Turn is one completed user/assistant exchange stored in working memory.
@@ -29,6 +43,7 @@ type Turn struct {
 	CreatedAt        time.Time `json:"created_at"`
 	ImportanceScore  float64   `json:"importance_score,omitempty"`
 	ExplicitRemember bool      `json:"explicit_remember,omitempty"`
+	MemoryScope      Level     `json:"memory_scope,omitempty"`
 }
 
 // SearchHit is a relevant long-term memory returned for the current query.
@@ -74,6 +89,8 @@ type WorkingStore interface {
 
 // LongTermStore is the adapter boundary for LEANN or another semantic-memory backend.
 // Search and Upsert must honor the complete Scope; Upsert must be idempotent by record ID.
+// Scope.MemoryScopeUser has an empty ConversationID; Scope.MemoryScopeConversation
+// includes both UserID and ConversationID.
 type LongTermStore interface {
 	Search(ctx context.Context, scope Scope, query string, limit int) ([]SearchHit, error)
 	Upsert(ctx context.Context, record Record) error
@@ -124,17 +141,17 @@ type Config struct {
 
 // Request is one incoming conversation message.
 type Request struct {
-	Scope        Scope
-	UserMessage  string
-	SystemPrompt string
-	Remember     bool // explicit user/application request to retain this turn
+	Scope        Scope  `json:"scope"`
+	UserMessage  string `json:"user_message"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	Remember     bool   `json:"remember,omitempty"` // explicit user/application request to retain this turn
 }
 
 // Response is the generated answer and memory actions completed for this turn.
 type Response struct {
-	Assistant  string
-	TurnID     string
-	Recalled   []SearchHit
-	Remembered bool
-	Importance float64
+	Assistant  string      `json:"assistant"`
+	TurnID     string      `json:"turn_id"`
+	Recalled   []SearchHit `json:"recalled"`
+	Remembered bool        `json:"remembered"`
+	Importance float64     `json:"importance"`
 }

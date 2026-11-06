@@ -18,11 +18,17 @@ import (
 )
 
 type fakeProvider struct {
-	request llm.Request
-	calls   int
+	request      llm.Request
+	calls        int
+	providerName string
 }
 
-func (p *fakeProvider) Name() string { return "fake" }
+func (p *fakeProvider) Name() string {
+	if p.providerName != "" {
+		return p.providerName
+	}
+	return "fake"
+}
 
 func (p *fakeProvider) Complete(_ context.Context, req llm.Request) (llm.Response, error) {
 	p.request = req
@@ -75,6 +81,7 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 		"ai.prompt", "ai.team", "ai.decide", "ai.cost.estimate", "ai.nflow.view",
 		"ai.weights.adapters", "ai.weights.inspect", "ai.weights.patch",
 		"ai.retrieval.index", "ai.retrieval.delete", "ai.retrieval.search", "ai.rag.answer",
+		"ai.memory.reply", "ai.skills.list", "ai.skills.get", "ai.skills.draft",
 		"external.exec",
 	} {
 		if _, found := cfg.Resolver.Action(name); !found {

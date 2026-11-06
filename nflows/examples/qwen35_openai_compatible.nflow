@@ -1,0 +1,26 @@
+@description "Call a locally served Qwen3.5-4B model through the configurable OpenAI-compatible provider"
+# Model: Qwen/Qwen3.5-4B
+# Immutable Hugging Face revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+# Model card: https://huggingface.co/Qwen/Qwen3.5-4B
+# Download exactly this revision, then start an OpenAI-compatible local endpoint:
+#   hf download Qwen/Qwen3.5-4B --revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --local-dir ./models/qwen3.5-4b
+#   vllm serve ./models/qwen3.5-4b --served-model-name qwen35-4b --host 127.0.0.1 --port 8000
+# Use only a trusted workflow: named LLM declarations can choose endpoints and environment-variable names.
+@require github.com/nexssp/ai main as ai
+
+@llm qwen_local {
+    provider: "openai-compatible",
+    model: "qwen35-4b",
+    base_url: "http://127.0.0.1:8000/v1",
+    timeout: "120s"
+}
+
+@assert result.content != ""
+@assert result.provider == "openai-compatible"
+
+{
+    user: .prompt,
+    system: "Answer accurately. If the information is uncertain, say so.",
+    max_tokens: 256,
+    temperature: 0.2
+} -> llm.qwen_local

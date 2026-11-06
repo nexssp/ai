@@ -10,9 +10,13 @@ import (
 )
 
 type testWorkingStore struct {
-	turns     map[string][]Turn
-	appendErr error
-	deleteErr error
+	turns       map[string][]Turn
+	appendErr   error
+	deleteErr   error
+	recentScope Scope
+	appendScope Scope
+	olderScope  Scope
+	deleteScope Scope
 }
 
 func newTestWorkingStore() *testWorkingStore {
@@ -20,6 +24,7 @@ func newTestWorkingStore() *testWorkingStore {
 }
 
 func (s *testWorkingStore) Recent(_ context.Context, scope Scope, limit int) ([]Turn, error) {
+	s.recentScope = scope
 	all := s.turns[scopeKey(scope)]
 	if limit < len(all) {
 		all = all[len(all)-limit:]
@@ -28,6 +33,7 @@ func (s *testWorkingStore) Recent(_ context.Context, scope Scope, limit int) ([]
 }
 
 func (s *testWorkingStore) Append(_ context.Context, scope Scope, turn Turn) error {
+	s.appendScope = scope
 	if s.appendErr != nil {
 		return s.appendErr
 	}
@@ -37,6 +43,7 @@ func (s *testWorkingStore) Append(_ context.Context, scope Scope, turn Turn) err
 }
 
 func (s *testWorkingStore) Older(_ context.Context, scope Scope, before time.Time, limit int) ([]Turn, error) {
+	s.olderScope = scope
 	all := s.turns[scopeKey(scope)]
 	out := make([]Turn, 0, limit)
 	for _, turn := range all {
@@ -51,6 +58,7 @@ func (s *testWorkingStore) Older(_ context.Context, scope Scope, before time.Tim
 }
 
 func (s *testWorkingStore) Delete(_ context.Context, scope Scope, turnIDs []string) error {
+	s.deleteScope = scope
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}
@@ -117,7 +125,7 @@ func TestReplyAssemblesHybridContextAndPromotesImportantTurn(t *testing.T) {
 	ktest.RequireEqual(t, response.Assistant, "Understood.")
 	ktest.RequireCondition(t, response.Remembered, "important turn was not promoted")
 	ktest.RequireEqual(t, len(response.Recalled), 1)
-	ktest.RequireEqual(t, semantic.searched, scope)
+	ktest.RequireEqual(t, semantic.searched, Scope{UserID: scope.UserID, ConversationID: scope.ConversationID, MemoryScope: MemoryScopeConversation})
 	ktest.RequireEqual(t, len(gotPrompt), 5)
 	ktest.RequireEqual(t, gotPrompt[0], Message{Role: "system", Content: "Be helpful."})
 	ktest.RequireEqual(t, gotPrompt[1].Role, "system")
@@ -194,6 +202,62 @@ func TestReplyRequiresCompleteScope(t *testing.T) {
 	ktest.RequireNoError(t, err)
 	_, err = service.Reply(context.Background(), Request{Scope: Scope{UserID: "u"}, UserMessage: "hello"})
 	ktest.RequireCondition(t, err != nil, "incomplete scope should fail")
+	_, err = service.Reply(context.Background(), Request{Scope: Scope{UserID: "u", ConversationID: "c", MemoryScope: "global"}, UserMessage: "hello"})
+	ktest.RequireCondition(t, err != nil, "unsupported memory_scope should fail")
+}
+
+func TestUserMemoryScopeSharesLongTermMemoryButNotWorkingHistory(t *testing.T) {
+	t.Parallel()
+	working := newTestWorkingStore()
+	semantic := &testSemanticStore{}
+	service, err := NewService(Config{}, working, semantic, CompleteFunc(func(context.Context, []Message) (string, error) {
+		return "answer", nil
+	}))
+	ktest.RequireNoError(t, err)
+
+	for _, conversationID := range []string{"chat-a", "chat-b"} {
+		_, err := service.Reply(context.Background(), Request{
+			Scope:       Scope{UserID: "user-1", ConversationID: conversationID, MemoryScope: MemoryScopeUser},
+			UserMessage: "Remember this preference.",
+			Remember:    true,
+		})
+		ktest.RequireNoError(t, err)
+		ktest.RequireEqual(t, semantic.searched, Scope{UserID: "user-1", MemoryScope: MemoryScopeUser})
+		ktest.RequireEqual(t, semantic.records[len(semantic.records)-1].Scope, Scope{UserID: "user-1", MemoryScope: MemoryScopeUser})
+		ktest.RequireEqual(t, working.recentScope, Scope{UserID: "user-1", ConversationID: conversationID, MemoryScope: MemoryScopeConversation})
+		ktest.RequireEqual(t, working.appendScope, working.recentScope)
+		ktest.RequireEqual(t, len(working.turns[scopeKey(Scope{UserID: "user-1", ConversationID: conversationID})]), 1)
+	}
+
+	_, err = service.Reply(context.Background(), Request{
+		Scope:       Scope{UserID: "user-2", ConversationID: "chat-a", MemoryScope: MemoryScopeUser},
+		UserMessage: "Remember my preference.",
+		Remember:    true,
+	})
+	ktest.RequireNoError(t, err)
+	ktest.RequireEqual(t, semantic.searched, Scope{UserID: "user-2", MemoryScope: MemoryScopeUser})
+	ktest.RequireEqual(t, semantic.records[len(semantic.records)-1].Scope, Scope{UserID: "user-2", MemoryScope: MemoryScopeUser})
+}
+
+func TestPromoteOlderPreservesRecordedUserMemoryScope(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	scope := Scope{UserID: "user-1", ConversationID: "chat-1", MemoryScope: MemoryScopeConversation}
+	working := newTestWorkingStore()
+	working.turns[scopeKey(scope)] = []Turn{{
+		ID: "remembered-user-turn", User: "My preference is concise answers.", Assistant: "Understood.",
+		CreatedAt: now.Add(-time.Hour), MemoryScope: MemoryScopeUser,
+	}}
+	semantic := &testSemanticStore{}
+	service, err := NewService(Config{}, working, semantic, CompleteFunc(func(context.Context, []Message) (string, error) { return "", nil }))
+	ktest.RequireNoError(t, err)
+
+	count, err := service.PromoteOlder(context.Background(), scope, now, 1)
+	ktest.RequireNoError(t, err)
+	ktest.RequireEqual(t, count, 1)
+	ktest.RequireEqual(t, semantic.records[0].Scope, Scope{UserID: "user-1", MemoryScope: MemoryScopeUser})
+	ktest.RequireEqual(t, working.olderScope, Scope{UserID: "user-1", ConversationID: "chat-1", MemoryScope: MemoryScopeConversation})
+	ktest.RequireEqual(t, working.deleteScope, working.olderScope)
 }
 
 func TestMemoryServiceRejectsNULContainingScopeIdentifiers(t *testing.T) {

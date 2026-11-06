@@ -79,7 +79,10 @@ func (s *Service) Reply(ctx context.Context, request Request) (Response, error) 
 		return Response{}, xerr.Validation("memory: user message is required")
 	}
 
-	recent, err := s.working.Recent(ctx, request.Scope, s.config.RecentTurns)
+	workingScope := conversationScope(request.Scope)
+	memoryScope := effectiveMemoryScope(request.Scope.MemoryScope)
+	semanticScope := durableScope(request.Scope, memoryScope)
+	recent, err := s.working.Recent(ctx, workingScope, s.config.RecentTurns)
 	if err != nil {
 		return Response{}, xerr.Unavailable("memory: read working history", err)
 	}
@@ -87,7 +90,7 @@ func (s *Service) Reply(ctx context.Context, request Request) (Response, error) 
 	var recalled []SearchHit
 	shouldRecall := s.config.ShouldRecall == nil || s.config.ShouldRecall(ctx, request.Scope, request.UserMessage)
 	if shouldRecall && strings.TrimSpace(request.UserMessage) != "" {
-		recalled, err = s.semantic.Search(ctx, request.Scope, request.UserMessage, s.config.RecallTopK)
+		recalled, err = s.semantic.Search(ctx, semanticScope, request.UserMessage, s.config.RecallTopK)
 		if err != nil {
 			return Response{}, xerr.Unavailable("memory: search long-term memory", err)
 		}
@@ -121,9 +124,10 @@ func (s *Service) Reply(ctx context.Context, request Request) (Response, error) 
 		CreatedAt:        time.Now().UTC(),
 		ImportanceScore:  importance,
 		ExplicitRemember: request.Remember,
+		MemoryScope:      memoryScope,
 	}
 	response := Response{Assistant: answer, TurnID: turnID, Recalled: recalled, Importance: importance}
-	if err := s.working.Append(ctx, request.Scope, turn); err != nil {
+	if err := s.working.Append(ctx, workingScope, turn); err != nil {
 		return response, xerr.Unavailable("memory: save completed turn to working memory", err)
 	}
 
@@ -132,7 +136,7 @@ func (s *Service) Reply(ctx context.Context, request Request) (Response, error) 
 		if request.Remember {
 			reason = "explicit"
 		}
-		if err := s.semantic.Upsert(ctx, recordForTurn(request.Scope, turn, reason)); err != nil {
+		if err := s.semantic.Upsert(ctx, recordForTurn(semanticScope, turn, reason)); err != nil {
 			return response, xerr.Unavailable("memory: promote important turn to long-term memory", err)
 		}
 		response.Remembered = true
@@ -148,13 +152,14 @@ func (s *Service) PromoteOlder(ctx context.Context, scope Scope, before time.Tim
 	if err := validateScope(scope); err != nil {
 		return 0, err
 	}
+	workingScope := conversationScope(scope)
 	if before.IsZero() {
 		return 0, xerr.Validation("memory: promotion cutoff is required")
 	}
 	if limit <= 0 {
 		return 0, xerr.Validation("memory: promotion limit must be positive")
 	}
-	turns, err := s.working.Older(ctx, scope, before, limit)
+	turns, err := s.working.Older(ctx, workingScope, before, limit)
 	if err != nil {
 		return 0, xerr.Unavailable("memory: read old working turns", err)
 	}
@@ -166,12 +171,16 @@ func (s *Service) PromoteOlder(ctx context.Context, scope Scope, before time.Tim
 		if turn.ID == "" {
 			return 0, xerr.Validation("memory: old working turn has no ID")
 		}
-		if err := s.semantic.Upsert(ctx, recordForTurn(scope, turn, "age-promotion")); err != nil {
+		memoryScope := turn.MemoryScope
+		if memoryScope == "" {
+			memoryScope = effectiveMemoryScope(scope.MemoryScope)
+		}
+		if err := s.semantic.Upsert(ctx, recordForTurn(durableScope(scope, memoryScope), turn, "age-promotion")); err != nil {
 			return 0, xerr.Unavailable("memory: promote old turn "+turn.ID, err)
 		}
 		ids = append(ids, turn.ID)
 	}
-	if err := s.working.Delete(ctx, scope, ids); err != nil {
+	if err := s.working.Delete(ctx, workingScope, ids); err != nil {
 		return 0, xerr.Unavailable("memory: trim promoted working turns", err)
 	}
 	return len(ids), nil
@@ -239,7 +248,30 @@ func validateScope(scope Scope) error {
 	if strings.ContainsRune(scope.UserID, '\x00') || strings.ContainsRune(scope.ConversationID, '\x00') {
 		return xerr.Validation("memory: scope identifiers must not contain NUL characters")
 	}
+	if scope.MemoryScope != "" && scope.MemoryScope != MemoryScopeConversation && scope.MemoryScope != MemoryScopeUser {
+		return xerr.Validation("memory: memory_scope must be conversation or user")
+	}
 	return nil
+}
+
+func effectiveMemoryScope(scope Level) Level {
+	if scope == "" {
+		return MemoryScopeConversation
+	}
+	return scope
+}
+
+func conversationScope(scope Scope) Scope {
+	scope.MemoryScope = MemoryScopeConversation
+	return scope
+}
+
+func durableScope(scope Scope, memoryScope Level) Scope {
+	scope.MemoryScope = effectiveMemoryScope(memoryScope)
+	if scope.MemoryScope == MemoryScopeUser {
+		scope.ConversationID = ""
+	}
+	return scope
 }
 
 func recordForTurn(scope Scope, turn Turn, reason string) Record {
