@@ -21,15 +21,8 @@ func TestNFlowViewUsesJSONFieldNames(t *testing.T) {
 	fixture.Attempt.Provider = "openai"
 
 	viewAction := newNFlowViewAction()
-	typed, ok := viewAction.(action.TypedPayload)
-	if !ok {
-		t.Fatalf("view action type %T does not expose typed payloads", viewAction)
-	}
-	if _, requestOK := typed.ReqPayload().(NFlowViewRequest); !requestOK {
-		t.Fatalf("request payload type = %T, want NFlowViewRequest", typed.ReqPayload())
-	}
-	if _, responseOK := typed.ResPayload().(NFlowViewResponse); !responseOK {
-		t.Fatalf("response payload type = %T, want NFlowViewResponse", typed.ResPayload())
+	if _, ok := viewAction.(action.TypedPayload); ok {
+		t.Fatalf("view action type %T must not expose a static payload contract", viewAction)
 	}
 	value, err := viewAction.DoAny(context.Background(), fixture)
 	if err != nil {

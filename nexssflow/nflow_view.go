@@ -53,8 +53,8 @@ func (r NFlowViewResponse) MarshalJSON() ([]byte, error) {
 }
 
 // nflowViewAction adapts the typed action's JSON-shaped response to the runtime
-// object needed by Flow's existing snake_case selectors. Its declared action
-// request and response remain NFlowViewRequest and NFlowViewResponse structs.
+// object needed by Flow's existing snake_case selectors. It deliberately does
+// not expose TypedPayload: Flow cannot statically prove arbitrary JSON shapes.
 type nflowViewAction struct {
 	typed   action.AnyAction
 	payload action.TypedPayload
@@ -80,14 +80,6 @@ func (a *nflowViewAction) AddAnyHook(hooks ...action.AnyHook) { a.typed.AddAnyHo
 
 func (a *nflowViewAction) CloneWithHooks(hooks ...action.AnyHook) action.AnyAction {
 	return &nflowViewAction{typed: a.typed.CloneWithHooks(hooks...), payload: a.payload}
-}
-
-func (a *nflowViewAction) ReqPayload() any {
-	return a.payload.ReqPayload()
-}
-
-func (a *nflowViewAction) ResPayload() any {
-	return a.payload.ResPayload()
 }
 
 func (a *nflowViewAction) ExecuteDecoded(ctx context.Context, decode action.DecodeFunc) (any, error) {
