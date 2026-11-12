@@ -39,6 +39,7 @@ func TestFallbackDefaultRetriesOnlyTransientProviderKinds(t *testing.T) {
 		{xerr.KindTimeout, true},
 		{xerr.KindCircuitBreaker, true},
 		{xerr.KindBadRequest, false},
+		{xerr.KindUnsupportedMediaType, false},
 		{xerr.KindUnauthorized, false},
 		{xerr.KindForbidden, false},
 		{xerr.KindConflict, false},

@@ -27,7 +27,8 @@ func (c FallbackConfig) normalize() FallbackConfig {
 	c.ShouldFallback = func(err error) bool {
 		switch xerr.KindFrom(err) {
 		case xerr.KindUnavailable, xerr.KindTooManyRequests, xerr.KindRateLimit, xerr.KindTimeout, xerr.KindCircuitBreaker:
-		case xerr.KindBadRequest, xerr.KindUnauthorized, xerr.KindForbidden,
+		case xerr.KindBadRequest, xerr.KindUnsupportedMediaType,
+			xerr.KindUnauthorized, xerr.KindForbidden,
 			xerr.KindNotFound, xerr.KindConflict, xerr.KindValidation,
 			xerr.KindInternal, xerr.KindMethodNotAllowed, xerr.KindCanceled,
 			xerr.KindDatabase, xerr.KindShutdown:
