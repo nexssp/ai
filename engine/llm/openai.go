@@ -29,6 +29,7 @@ type openAIRequestPayload struct {
 	ReasoningEffort ReasoningEffort       `json:"reasoning_effort,omitempty"`
 	ResponseFormat  *openAIResponseFormat `json:"response_format,omitempty"`
 	Tools           []ToolSpec            `json:"tools,omitempty"`
+	ToolChoice      ToolChoice            `json:"tool_choice,omitempty"`
 	Stream          bool                  `json:"stream,omitempty"`
 }
 
@@ -98,6 +99,7 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 		payload := openAIRequestPayload{
 			Model: req.Model, Messages: req.Messages, Temperature: req.Temperature,
 			MaxTokens: req.MaxTokens, ReasoningEffort: req.ReasoningEffort,
+			ToolChoice: req.ToolChoice,
 		}
 		if req.JSONMode {
 			payload.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
@@ -160,6 +162,8 @@ func (p *OpenAIProvider) Name() string {
 
 	return providerOpenAI
 }
+
+func (p *OpenAIProvider) SupportsToolCalls() bool { return true }
 
 func (p *OpenAIProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	if req.Model == "" && p.cfg.DefaultModel == "" {

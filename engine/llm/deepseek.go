@@ -27,6 +27,11 @@ func NewDeepSeek(cfg Config) *DeepSeekProvider {
 
 func (p *DeepSeekProvider) Name() string { return p.underlying.Name() }
 
+func (p *DeepSeekProvider) SupportsToolCalls() bool {
+	provider, ok := p.underlying.(ToolCallingProvider)
+	return ok && provider.SupportsToolCalls()
+}
+
 func (p *DeepSeekProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	res, err := p.underlying.Complete(ctx, req)
 	if err != nil {

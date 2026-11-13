@@ -16,7 +16,32 @@ Set `LLM_PROVIDER` to any provider supported by `engine/llm`, and provide `LLM_M
 
 ## Typed actions
 
-The library exports `ai.prompt`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action is backed by a Go request struct and a typed result. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
+The library exports `ai.prompt`, `ai.tool_specs`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action is backed by a Go request struct and a typed result. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
+
+## Function tools from NFlow metadata
+
+Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-callable function only when it declares both `:tool-schema=SchemaName` and `:tool-description="..."`. The pipeline's name becomes the function name, the description comes from its modifier, and `ai.tool_specs` converts the referenced `@schema` into provider-ready parameters. Prefix the schema name with `!` (for example, `:tool-schema=!NoArguments`) to emit `additionalProperties: false`. This tool-argument schema is independent of `:in-schema` and `:out-schema`, so internal task envelopes and dispatch metadata need not be exposed to the model. A schema with an empty body, such as `@schema NoArguments {}`, represents a zero-property object.
+
+`ai.tool_specs` preserves the current pipeline state and adds the generated declarations under `ai_tool_specs`; pass that value as `tools` to `ai.prompt`:
+
+```nflow
+@schema CountArguments {
+  query string `json:"query" validate:"required"`
+}
+@pipeline count_words
+  :tool-schema=!CountArguments
+  :tool-description="Count words in the supplied query."
+  # pipeline implementation
+@end
+
+@pipeline ask
+  noop as request
+  -> ai.tool_specs as prepared
+  -> { user: request.query, tools: prepared.ai_tool_specs } -> ai.prompt
+@end
+```
+
+Only explicitly annotated pipelines are exposed. The schema is compiled from NFlow metadata during materialization, and a missing schema or description is a compile-time error.
 
 ## Named LLM instances
 

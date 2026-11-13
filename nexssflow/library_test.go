@@ -19,6 +19,7 @@ import (
 
 type fakeProvider struct {
 	request      llm.Request
+	response     llm.Response
 	calls        int
 	providerName string
 }
@@ -37,6 +38,13 @@ func (p *fakeProvider) Complete(_ context.Context, req llm.Request) (llm.Respons
 	if model == "" {
 		model = "fake-model"
 	}
+	if len(p.response.ToolCalls) > 0 {
+		response := p.response
+		if response.Model == "" {
+			response.Model = model
+		}
+		return response, nil
+	}
 	return llm.Response{Content: "fake answer", Model: model, PromptTokens: 3, CompTokens: 2}, nil
 }
 
@@ -44,13 +52,18 @@ func (p *fakeProvider) Stream(context.Context, llm.Request) (iter.Seq2[string, e
 	return func(_ func(string, error) bool) {}, nil
 }
 
+func (p *fakeProvider) SupportsToolCalls() bool { return true }
+
 func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	factory, ok := compiler.Lookup(ID)
 	if !ok {
 		t.Fatal("ai bundle factory was not registered")
 	}
 
-	provider := &fakeProvider{}
+	provider := &fakeProvider{response: llm.Response{
+		Content: "fake answer", Model: "fake-model", PromptTokens: 3, CompTokens: 2,
+		ToolCalls: []llm.ToolCall{{ID: "call-flow", Type: "function", Function: llm.FunctionCall{Name: "count_words", Arguments: "{}"}}},
+	}}
 	var resolvedGlobal GlobalOptions
 	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{DefaultModel: "configured-model"}, func(global GlobalOptions, _ LLMDecl) (llm.Provider, error) {
 		resolvedGlobal = global
@@ -94,8 +107,18 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 		"candidate_id": "candidate-a",
 		"attempt_id":   "attempt-1",
 		"context":      contextJSON,
-		"system":       "Be concise",
-		"user":         "What is 2+2?",
+		"tools": []any{
+			map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name": "count_words", "description": "Count words.",
+					"parameters": map[string]any{"type": "object", "properties": map[string]any{}, "required": []any{}, "additionalProperties": false},
+				},
+			},
+		},
+		"tool_choice": "required",
+		"system":      "Be concise",
+		"user":        "What is 2+2?",
 	})
 	if err != nil {
 		t.Fatalf("runner.Execute: %v", err)
@@ -107,14 +130,118 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	if out.Content != "fake answer" || out.CandidateID != "candidate-a" || out.AttemptID != "attempt-1" || out.PromptTokens != 3 || out.TotalTokens != 5 {
 		t.Fatalf("unexpected typed output: %+v", out)
 	}
+	if len(out.ToolCalls) != 1 || out.ToolCalls[0].ID != "call-flow" || out.ToolCalls[0].Function.Name != "count_words" || out.ToolCalls[0].Function.Arguments != "{}" {
+		t.Fatalf("Flow output lost tool calls: %+v", out.ToolCalls)
+	}
 	if string(out.Context) != string(contextJSON) {
 		t.Fatalf("explicit context = %s, want %s", out.Context, contextJSON)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", provider.calls)
 	}
-	if resolvedGlobal.DefaultModel != "configured-model" || provider.request.Model != "" || len(provider.request.Messages) != 2 || provider.request.Messages[0].Content != "Be concise" || provider.request.Messages[1].Content != "What is 2+2?" {
+	if resolvedGlobal.DefaultModel != "configured-model" || provider.request.Model != "" || len(provider.request.Messages) != 2 || provider.request.Messages[0].Content != "Be concise" || provider.request.Messages[1].Content != "What is 2+2?" || len(provider.request.Tools) != 1 || provider.request.Tools[0].Function.Name != "count_words" || provider.request.ToolChoice != llm.ToolChoiceRequired {
 		t.Fatalf("unexpected AI request: %+v", provider.request)
+	}
+	roundtrip, err := runner.Execute(context.Background(), cfg, "ai.prompt", "tool-roundtrip.nflow", map[string]any{
+		"messages": []any{
+			map[string]any{"role": "system", "content": "Use the tool result."},
+			map[string]any{"role": "user", "content": "Count these words."},
+			map[string]any{"role": "assistant", "tool_calls": []any{
+				map[string]any{"id": "call-flow-roundtrip", "type": "function", "function": map[string]any{"name": "count_words", "arguments": "{}"}},
+			}},
+			map[string]any{"role": "tool", "tool_call_id": "call-flow-roundtrip", "name": "count_words", "content": "3\n"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("runner.Execute message history: %v", err)
+	}
+	if _, ok := roundtrip.Output.(PromptResult); !ok {
+		t.Fatalf("message history output type = %T, want PromptResult", roundtrip.Output)
+	}
+	if provider.calls != 2 || len(provider.request.Messages) != 4 || provider.request.Messages[2].Role != llm.RoleAssistant || len(provider.request.Messages[2].ToolCalls) != 1 || provider.request.Messages[2].ToolCalls[0].ID != "call-flow-roundtrip" || provider.request.Messages[3].Role != llm.RoleTool || provider.request.Messages[3].ToolCallID != "call-flow-roundtrip" || provider.request.Messages[3].Content != "3\n" {
+		t.Fatalf("Flow message history did not round-trip: calls=%d messages=%+v", provider.calls, provider.request.Messages)
+	}
+}
+
+func TestPipelineToolSpecsDeriveFromNFlowMetadata(t *testing.T) {
+	provider := &fakeProvider{}
+	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+		return provider, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := runner.BuildConfig(append(native.Bundles(), bundle))
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	source := `@schema NoArguments {}
+@schema QueryArguments {
+	  query string ` + "`json:\"query\" validate:\"required\"`" + `
+}
+@pipeline count_words
+  :tool-schema=!NoArguments
+  :tool-description="Count words in the supplied query."
+  noop
+@end
+@pipeline search_text
+  :tool-schema=QueryArguments
+  :tool-description="Search for a query in text."
+  noop
+@end
+@pipeline ask_with_tools
+  noop as request
+  -> ai.tool_specs as prepared
+  -> {
+      user: "Count these words.",
+      tools: prepared.ai_tool_specs,
+      tool_choice: "required"
+    } -> ai.prompt
+@end
+pipeline.ask_with_tools`
+	if _, err := runner.Execute(context.Background(), cfg, source, "tool-specs.nflow", map[string]any{}); err != nil {
+		t.Fatalf("execute NFlow-derived tool specs: %v", err)
+	}
+	if len(provider.request.Tools) != 2 {
+		t.Fatalf("provider tools = %+v, want both annotated pipelines", provider.request.Tools)
+	}
+	tool := provider.request.Tools[0]
+	if tool.Type != "function" || tool.Function.Name != "count_words" || tool.Function.Description != "Count words in the supplied query." {
+		t.Fatalf("derived tool = %+v, want pipeline name and description", tool)
+	}
+	parameters, ok := tool.Function.Parameters.(map[string]any)
+	if !ok {
+		t.Fatalf("tool parameters have type %T, want JSON Schema object", tool.Function.Parameters)
+	}
+	if parameters["type"] != "object" || parameters["additionalProperties"] != false {
+		t.Fatalf("tool parameter schema = %#v, want strict object schema", parameters)
+	}
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool properties have type %T, want object", parameters["properties"])
+	}
+	if len(properties) != 0 {
+		t.Fatalf("empty tool properties = %#v, want no model arguments", properties)
+	}
+	tool = provider.request.Tools[1]
+	if tool.Type != "function" || tool.Function.Name != "search_text" || tool.Function.Description != "Search for a query in text." {
+		t.Fatalf("second derived tool = %+v, want second pipeline name and description", tool)
+	}
+	parameters, ok = tool.Function.Parameters.(map[string]any)
+	if !ok {
+		t.Fatalf("second tool parameters have type %T, want JSON Schema object", tool.Function.Parameters)
+	}
+	properties, ok = parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("second tool properties have type %T, want object", parameters["properties"])
+	}
+	query, ok := properties["query"].(map[string]any)
+	if !ok || query["type"] != "string" {
+		t.Fatalf("query property schema = %#v, want string", properties["query"])
+	}
+	required, ok := parameters["required"].([]string)
+	if !ok || !slices.Equal(required, []string{"query"}) {
+		t.Fatalf("required fields = %#v, want [query]", parameters["required"])
 	}
 }
 

@@ -16,11 +16,41 @@ func validateUser(user string) error {
 	return nil
 }
 
+func validatePromptMessages(req PromptRequest) error {
+	if len(req.Messages) == 0 {
+		return validateUser(req.User)
+	}
+	if req.User != "" || req.System != "" {
+		return xerr.Validation("ai.prompt: messages cannot be combined with user or system")
+	}
+	for _, message := range req.Messages {
+		if message.Role == llm.RoleUser && strings.TrimSpace(message.Content) != "" {
+			return nil
+		}
+	}
+	return xerr.Validation("ai.prompt: messages must include a non-empty user message")
+}
+
+func validateToolOptions(req PromptRequest) error {
+	if len(req.Tools) == 0 {
+		if req.ToolChoice != "" {
+			return xerr.Validation("ai.prompt: tool_choice requires at least one tool")
+		}
+		return nil
+	}
+	switch req.ToolChoice {
+	case "", llm.ToolChoiceAuto, llm.ToolChoiceNone, llm.ToolChoiceRequired:
+		return nil
+	default:
+		return xerr.Validation("ai.prompt: tool_choice must be auto, none, or required")
+	}
+}
+
 // complete runs exactly one provider attempt and returns an explicit typed
 // result. Candidate selection, budget checks, and fallback policy belong to
 // the calling workflow, not this action.
 func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (PromptResult, error) {
-	if err := validateUser(req.User); err != nil {
+	if err := validateToolOptions(req); err != nil {
 		return PromptResult{}, err
 	}
 	priced := req.RateCardID != "" || req.ExpectedCurrency != nil
@@ -41,12 +71,21 @@ func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (Pr
 	if err := requireProvider(provider); err != nil {
 		return PromptResult{}, err
 	}
-
-	messages := make([]llm.Message, 0, 2)
-	if req.System != "" {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: req.System})
+	if len(req.Tools) > 0 {
+		toolProvider, ok := provider.(llm.ToolCallingProvider)
+		if !ok || !toolProvider.SupportsToolCalls() {
+			return PromptResult{}, xerr.Validation("ai.prompt: provider " + provider.Name() + " does not support non-streaming function tool calls")
+		}
 	}
-	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: req.User})
+
+	messages := req.Messages
+	if len(messages) == 0 {
+		messages = make([]llm.Message, 0, 2)
+		if req.System != "" {
+			messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: req.System})
+		}
+		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: req.User})
+	}
 
 	response, err := provider.Complete(ctx, llm.Request{
 		Model:                       req.Model,
@@ -58,6 +97,8 @@ func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (Pr
 		EstimatedCachedPromptTokens: req.CachedPromptTokens,
 		EstimatedCompletionTokens:   req.CompletionTokens,
 		Messages:                    messages,
+		Tools:                       req.Tools,
+		ToolChoice:                  req.ToolChoice,
 		MaxTokens:                   req.MaxTokens,
 		Temperature:                 req.Temperature,
 		JSONMode:                    req.JSONMode,
@@ -84,6 +125,7 @@ func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (Pr
 		Context:            req.Context,
 		Provider:           provider.Name(),
 		Content:            response.Content,
+		ToolCalls:          response.ToolCalls,
 		Model:              model,
 		PromptTokens:       response.PromptTokens,
 		CachedPromptTokens: response.CachedPromptTokens,

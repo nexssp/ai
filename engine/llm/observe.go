@@ -49,6 +49,11 @@ func NewObservableProvider(inner Provider, emit ProviderTrace) Provider {
 
 func (p *ObservableProvider) Name() string { return p.inner.Name() }
 
+func (p *ObservableProvider) SupportsToolCalls() bool {
+	provider, ok := p.inner.(ToolCallingProvider)
+	return ok && provider.SupportsToolCalls()
+}
+
 func (p *ObservableProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	model := req.Model
 	if model == "" {

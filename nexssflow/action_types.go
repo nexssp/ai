@@ -18,20 +18,25 @@ type PromptRequest struct {
 	ExpectedCurrency *cost.Currency `json:"expected_currency,omitempty"`
 	// PromptTokens, CachedPromptTokens, and CompletionTokens are the caller's
 	// preflight basis, not provider-reported usage. The result Usage carries actuals.
-	PromptTokens       int                   `json:"prompt_tokens,omitempty"`
-	CachedPromptTokens int                   `json:"cached_prompt_tokens,omitempty"`
-	CompletionTokens   int                   `json:"completion_tokens,omitempty"`
-	Context            json.RawMessage       `json:"context,omitempty"`
-	User               string                `json:"user"`
-	System             string                `json:"system,omitempty"`
-	Provider           string                `json:"provider,omitempty"`
-	Model              string                `json:"model,omitempty"`
-	BaseURL            string                `json:"base_url,omitempty"`
-	MaxTokens          int                   `json:"max_tokens,omitempty"`
-	Temperature        float64               `json:"temperature,omitempty"`
-	JSONMode           bool                  `json:"json_mode,omitempty"`
-	ReasoningEffort    llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
-	Fallback           *CandidateAttemptPlan `json:"fallback,omitempty"`
+	PromptTokens       int             `json:"prompt_tokens,omitempty"`
+	CachedPromptTokens int             `json:"cached_prompt_tokens,omitempty"`
+	CompletionTokens   int             `json:"completion_tokens,omitempty"`
+	Context            json.RawMessage `json:"context,omitempty"`
+	// Messages replaces the user/system shorthand and can carry assistant tool calls and tool results.
+	Messages []llm.Message `json:"messages,omitempty"`
+	User     string        `json:"user,omitempty"`
+	System   string        `json:"system,omitempty"`
+	// Tools and ToolChoice require a provider that advertises non-streaming tool-call support.
+	Tools           []llm.ToolSpec        `json:"tools,omitempty"`
+	ToolChoice      llm.ToolChoice        `json:"tool_choice,omitempty"`
+	Provider        string                `json:"provider,omitempty"`
+	Model           string                `json:"model,omitempty"`
+	BaseURL         string                `json:"base_url,omitempty"`
+	MaxTokens       int                   `json:"max_tokens,omitempty"`
+	Temperature     float64               `json:"temperature,omitempty"`
+	JSONMode        bool                  `json:"json_mode,omitempty"`
+	ReasoningEffort llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
+	Fallback        *CandidateAttemptPlan `json:"fallback,omitempty"`
 }
 
 // PromptResult is one provider attempt. It intentionally does not merge the
@@ -45,6 +50,7 @@ type PromptResult struct {
 	Context            json.RawMessage `json:"context,omitempty"`
 	Provider           string          `json:"provider"`
 	Content            string          `json:"content"`
+	ToolCalls          []llm.ToolCall  `json:"tool_calls,omitempty"`
 	Model              string          `json:"model"`
 	PromptTokens       int             `json:"prompt_tokens"`
 	CachedPromptTokens int             `json:"cached_prompt_tokens,omitempty"`

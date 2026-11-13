@@ -47,8 +47,11 @@ func TestOpenAICompleteUsesTypedWirePayload(t *testing.T) {
 		if payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" {
 			t.Errorf("response format = %+v, want json_object", payload.ResponseFormat)
 		}
+		if payload.ToolChoice != ToolChoiceRequired || len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "count_words" {
+			t.Errorf("tool configuration = %+v, want required count_words", payload)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"openai-wire-test","choices":[{"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`))
+		_, _ = w.Write([]byte(`{"model":"openai-wire-test","choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"count_words","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`))
 	}))
 	defer server.Close()
 
@@ -66,11 +69,16 @@ func TestOpenAICompleteUsesTypedWirePayload(t *testing.T) {
 		MaxTokens:             64,
 		JSONMode:              true,
 		ReasoningEffort:       ReasoningEffortHigh,
+		Tools: []ToolSpec{{Type: "function", Function: FunctionSpec{
+			Name: "count_words", Description: "Count words.",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},
+		}}},
+		ToolChoice: ToolChoiceRequired,
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if response.Content != "answer" || response.PromptTokens != 7 || response.CompTokens != 2 {
+	if response.PromptTokens != 7 || response.CompTokens != 2 || len(response.ToolCalls) != 1 || response.ToolCalls[0].Function.Name != "count_words" {
 		t.Fatalf("response = %+v", response)
 	}
 }

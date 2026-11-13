@@ -50,6 +50,22 @@ type FunctionSpec struct {
 	Example     any    `json:"example,omitempty"`
 }
 
+// ToolChoice selects how a provider handles the supplied function tools.
+// These common modes are supported by OpenAI-compatible Complete adapters.
+type ToolChoice string
+
+const (
+	ToolChoiceAuto     ToolChoice = "auto"
+	ToolChoiceNone     ToolChoice = "none"
+	ToolChoiceRequired ToolChoice = "required"
+)
+
+// ToolCallingProvider advertises structured function-tool support for Complete.
+// Stream remains text-only unless a separate structured streaming API is added.
+type ToolCallingProvider interface {
+	SupportsToolCalls() bool
+}
+
 // ReasoningEffort is a provider/model-specific reasoning budget. Not all
 // providers accept every value; unsupported values are passed to the API and
 // reported using its normal typed provider error.
@@ -95,6 +111,7 @@ type Request struct {
 	OutputSchema                *JSONSchema     `json:"output_schema,omitempty"` // Optional schema constraint; currently applied by Anthropic Messages.
 	ReasoningEffort             ReasoningEffort `json:"reasoning_effort,omitempty"`
 	Tools                       []ToolSpec      `json:"tools,omitempty"`
+	ToolChoice                  ToolChoice      `json:"tool_choice,omitempty"`
 	IncludeThinking             bool            `json:"include_thinking,omitempty"`
 }
 

@@ -60,7 +60,7 @@ func main() {
 }
 ```
 
-A request can override its model and include messages, temperature, maximum tokens, JSON mode, tool definitions, or a typed reasoning-effort value where the selected provider/model supports it. Unsupported options are left to the provider API to reject; the shared interface does not claim identical capabilities across vendors.
+A request can override its model and include messages, temperature, maximum tokens, JSON mode, tool definitions, or a typed reasoning-effort value where the selected provider/model supports it. `ai.prompt` accepts either its `user`/`system` shorthand or explicit `messages` history; use history to preserve the assistant tool-call message and matching tool-result message on a follow-up request. Non-streaming function tool calls currently work with the OpenAI-compatible provider family, including Inception and DeepSeek. The supported `tool_choice` modes are `auto`, `none`, and `required`; `ai.prompt` rejects tool requests when the selected provider does not advertise tool-call support. Anthropic, Gemini, and Ollama do not yet have native tool-call mappings, and streaming remains text-only. Other unsupported options are left to the provider API to reject; the shared interface does not claim identical capabilities across vendors.
 
 ## Packages
 

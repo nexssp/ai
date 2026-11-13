@@ -29,6 +29,10 @@ func NewInception(cfg Config) *InceptionProvider {
 
 func (p *InceptionProvider) Name() string { return p.cfg.Name }
 
+func (p *InceptionProvider) SupportsToolCalls() bool {
+	return p.chat != nil && p.chat.SupportsToolCalls()
+}
+
 func (p *InceptionProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	return p.chat.Complete(ctx, req)
 }
@@ -45,6 +49,7 @@ func (p *InceptionProvider) Decide(_ context.Context, req DecisionRequest) (Deci
 }
 
 var (
-	_ Provider         = (*InceptionProvider)(nil)
-	_ DecisionProvider = (*InceptionProvider)(nil)
+	_ Provider            = (*InceptionProvider)(nil)
+	_ DecisionProvider    = (*InceptionProvider)(nil)
+	_ ToolCallingProvider = (*InceptionProvider)(nil)
 )
