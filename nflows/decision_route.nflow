@@ -6,13 +6,131 @@
 }
 
 # The caller supplies decision_* fields, including decision_max_output_tokens,
-# and candidate_a/candidate_b fields. Each
-# candidate has {id, description, attempt:{candidate_id, attempt_id, provider,
+# decision_allowed_ids, and decision_questions, plus candidate_a/candidate_b.
+# Each candidate has {id, description, attempt:{candidate_id, attempt_id, provider,
 # model, base_url?, rate_card_id, expected_currency, prompt_tokens,
 # cached_prompt_tokens?, completion_tokens, user, system?, max_tokens?, ...}}.
 # Provider/model/card/currency/attempt identifiers are never defaulted here.
 
+@schema DecisionCandidateAttempt {
+    candidate_id string
+    attempt_id string
+    provider string
+    model string
+    base_url *string
+    rate_card_id string
+    expected_currency string
+    prompt_tokens int
+    cached_prompt_tokens *int
+    completion_tokens int
+    user string
+    system *string
+    max_tokens *int
+    temperature *float64
+    json_mode *bool
+    reasoning_effort *string
+}
+
+@schema DecisionCandidate {
+    id string
+    description string
+    attempt DecisionCandidateAttempt
+}
+
+@schema DecisionCriterion {
+    id string
+    description string
+}
+
+@schema DecisionQuestion {
+    id string
+    type string
+    instructions string
+    criteria []DecisionCriterion
+}
+
+@schema DecisionRouteState {
+    task string
+    request string
+}
+
+@schema DecisionRouteActionInput {
+    attempt_id string
+    provider string
+    model string
+    base_url *string
+    rate_card_id string
+    expected_currency string
+    prompt_tokens int
+    cached_prompt_tokens *int
+    completion_tokens int
+    max_output_tokens int
+    state DecisionRouteState
+    allowed_ids []string
+    questions []DecisionQuestion
+    candidates []DecisionCandidate
+}
+
+@schema DecisionRouteRequest {
+    task string
+    request string
+    decision_attempt_id string
+    decision_provider string
+    decision_model string
+    decision_base_url *string
+    decision_rate_card_id string
+    decision_expected_currency string
+    decision_prompt_tokens int
+    decision_cached_prompt_tokens *int
+    decision_max_output_tokens int
+    decision_allowed_ids []string `validate:"required,min=1"`
+    decision_questions []DecisionQuestion `validate:"required,min=1"`
+    candidate_a DecisionCandidate
+    candidate_b DecisionCandidate
+}
+
+@schema DecisionFallbackInput {
+    attempt DecisionCandidateAttempt
+}
+
+@schema DecisionPrimaryInput {
+    primary DecisionCandidateAttempt
+    fallback DecisionCandidateAttempt
+}
+
+@schema DecisionPromptInput {
+    candidate_id string
+    attempt_id string
+    rate_card_id string
+    expected_currency *string
+    prompt_tokens int
+    cached_prompt_tokens *int
+    completion_tokens int
+    user string
+    system *string
+    provider string
+    model string
+    base_url *string
+    max_tokens *int
+    temperature *float64
+    json_mode *bool
+    reasoning_effort *string
+    fallback *DecisionCandidateAttempt
+}
+
+@pipeline decision_route_run_prompt
+  :request-schema=!DecisionPromptInput
+    ai.prompt
+@end
+
+@pipeline decision_route_decide
+  :request-schema=!DecisionRouteActionInput
+    ai.decide
+      -> ai.nflow.view
+@end
+
 @pipeline fallback_attempt
+  :request-schema=!DecisionFallbackInput
     {
         .attempt.candidate_id,
         .attempt.attempt_id,
@@ -65,11 +183,12 @@
             json_mode: __root__.prompt.json_mode,
             reasoning_effort: __root__.prompt.reasoning_effort
         }
-          -> ai.prompt
+          -> pipeline.decision_route_run_prompt
     }
 @end
 
 @pipeline primary_prompt
+  :request-schema=!DecisionPromptInput
     ai.prompt ? on_error {
         xerr.KindTimeout
           -> {attempt: .input.fallback}
@@ -92,6 +211,7 @@
 @end
 
 @pipeline primary_attempt
+  :request-schema=!DecisionPrimaryInput
     {
         .primary.candidate_id,
         .primary.attempt_id,
@@ -151,6 +271,7 @@
 @end
 
 @pipeline decision_route
+  :request-schema=!DecisionRouteRequest
     {
         attempt_id: .decision_attempt_id,
         model: .decision_model,
@@ -171,16 +292,8 @@
             max_output_tokens: .decision_max_output_tokens,
             base_url: .decision_base_url,
             state: {.task, .request},
-            allowed_ids: [.candidate_a.id, .candidate_b.id],
-            questions: [{
-                id: "route",
-                type: "choice",
-                instructions: "Select exactly one configured candidate ID.",
-                criteria: [
-                    {.candidate_a.id, .candidate_a.description},
-                    {.candidate_b.id, .candidate_b.description}
-                ]
-            }],
+            allowed_ids: .decision_allowed_ids,
+            questions: .decision_questions,
             candidates: [.candidate_a, .candidate_b]
         }
     }
@@ -206,18 +319,17 @@
             allowed_ids: __root__.decision.allowed_ids,
             candidates: __root__.decision.candidates
         }
-          -> ai.decide
-                    -> ai.nflow.view as decision_result
-                    -> match {
-                decision_result.answers[0].choice == __root__.candidates[0].id
-                  -> {primary: __root__.candidates[0].attempt, fallback: __root__.candidates[1].attempt}
-                  -> pipeline.primary_attempt,
-                decision_result.answers[0].choice == __root__.candidates[1].id
-                  -> {primary: __root__.candidates[1].attempt, fallback: __root__.candidates[0].attempt}
-                  -> pipeline.primary_attempt,
-                _
-                  -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
-            }
+          -> pipeline.decision_route_decide as decision_result
+          -> match {
+            decision_result.answers[0].choice == __root__.candidates[0].id
+              -> {primary: __root__.candidates[0].attempt, fallback: __root__.candidates[1].attempt}
+              -> pipeline.primary_attempt,
+            decision_result.answers[0].choice == __root__.candidates[1].id
+              -> {primary: __root__.candidates[1].attempt, fallback: __root__.candidates[0].attempt}
+              -> pipeline.primary_attempt,
+            _
+              -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
+          }
     }
 @end
 

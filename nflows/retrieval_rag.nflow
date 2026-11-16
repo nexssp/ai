@@ -30,7 +30,7 @@
   namespace string `validate:"required"`
   query string `validate:"required"`
   top_k int `validate:"gte=0"`
-  min_score float32 `validate:"gte=0,lte=1"`
+  min_score *float32 `validate:"gte=0,lte=1"`
 }
 
 @schema RetrievalMatch {
@@ -50,7 +50,7 @@
   namespace string `validate:"required"`
   query string `validate:"required"`
   top_k int `validate:"gte=0"`
-  min_score float32 `validate:"gte=0,lte=1"`
+  min_score *float32 `validate:"gte=0,lte=1"`
   provider string
   model string
   base_url string

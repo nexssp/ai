@@ -257,9 +257,28 @@ func TestRequiredBundleImportsEmbeddedCriticAlongsideGoAction(t *testing.T) {
 	}
 }
 
+func stringList(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return values, true
+	case []any:
+		result := make([]string, len(values))
+		for index, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			result[index] = text
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
 func runNFlowAssertions(t *testing.T, execution runner.Execution) {
 	t.Helper()
-	assertions, ok := execution.Meta["asserts"].([]string)
+	assertions, ok := stringList(execution.Meta["asserts"])
 	if !ok || len(assertions) == 0 {
 		t.Fatal("NFlow fixture did not expose its @assert directives")
 	}

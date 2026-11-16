@@ -15,13 +15,39 @@ type SkillGetRequest struct {
 	Name string `json:"name"`
 }
 
+type flowMemoryScopeRequest struct {
+	UserID         string `json:"user_id"`
+	ConversationID string `json:"conversation_id"`
+	MemoryScope    string `json:"memory_scope,omitempty"`
+}
+
+type flowMemoryReplyRequest struct {
+	Scope        flowMemoryScopeRequest `json:"scope"`
+	UserMessage  string                 `json:"user_message"`
+	SystemPrompt string                 `json:"system_prompt,omitempty"`
+	Remember     bool                   `json:"remember,omitempty"`
+}
+
+func (request flowMemoryReplyRequest) toDomain() memory.Request {
+	return memory.Request{
+		Scope: memory.Scope{
+			UserID:         request.Scope.UserID,
+			ConversationID: request.Scope.ConversationID,
+			MemoryScope:    memory.Level(request.Scope.MemoryScope),
+		},
+		UserMessage:  request.UserMessage,
+		SystemPrompt: request.SystemPrompt,
+		Remember:     request.Remember,
+	}
+}
+
 func newMemorySkillActions(memoryService *memory.Service, catalog *skills.Catalog) []action.AnyAction {
 	return []action.AnyAction{
-		action.New[memory.Request, memory.Response]("ai.memory.reply", func(ctx context.Context, request memory.Request) (memory.Response, error) {
+		action.New[flowMemoryReplyRequest, memory.Response]("ai.memory.reply", func(ctx context.Context, request flowMemoryReplyRequest) (memory.Response, error) {
 			if memoryService == nil {
 				return memory.Response{}, xerr.Internal("ai.memory.reply: memory service is not configured")
 			}
-			return memoryService.Reply(ctx, request)
+			return memoryService.Reply(ctx, request.toDomain())
 		}).Description("Reply using conversation-local working history and an explicitly selected conversation or user long-term memory scope").Tag("ai", "memory", "reply").Build(),
 		action.New[struct{}, []skills.Skill]("ai.skills.list", func(context.Context, struct{}) ([]skills.Skill, error) {
 			if catalog == nil {

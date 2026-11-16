@@ -18,7 +18,11 @@ var currentTime = time.Now
 // configured DecisionProvider. Candidate prompt attempts are metadata only;
 // they are echoed for NFlow routing and never passed to the decision provider.
 func newDecisionActionWith(global GlobalOptions, build decisionProviderBuilder) action.AnyAction {
-	return action.New[DecisionActionRequest, DecisionActionResult]("ai.decide", func(ctx context.Context, req DecisionActionRequest) (DecisionActionResult, error) {
+	return action.New[flowDecisionActionRequest, DecisionActionResult]("ai.decide", func(ctx context.Context, flowRequest flowDecisionActionRequest) (DecisionActionResult, error) {
+		req, conversionErr := flowRequest.toDomain()
+		if conversionErr != nil {
+			return DecisionActionResult{}, xerr.Validation("ai.decide: invalid currency metadata: " + conversionErr.Error())
+		}
 		if build == nil {
 			return DecisionActionResult{}, xerr.Internal("ai.decide: decision provider builder is unavailable")
 		}
@@ -135,7 +139,11 @@ func validateDecisionCandidates(req DecisionActionRequest) error {
 // newCostEstimateAction is a pure calculation boundary. Selector approval and
 // budget reservation belong to the host guard, not this estimate action.
 func newCostEstimateAction() action.AnyAction {
-	return action.New[CostEstimateRequest, CostEstimateResult]("ai.cost.estimate", func(_ context.Context, req CostEstimateRequest) (CostEstimateResult, error) {
+	return action.New[flowCostEstimateRequest, CostEstimateResult]("ai.cost.estimate", func(_ context.Context, flowRequest flowCostEstimateRequest) (CostEstimateResult, error) {
+		req, err := flowRequest.toDomain()
+		if err != nil {
+			return CostEstimateResult{}, xerr.Validation("ai.cost.estimate: invalid currency metadata: " + err.Error())
+		}
 		if err := validateCostEstimateRequest(req); err != nil {
 			return CostEstimateResult{}, err
 		}

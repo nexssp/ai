@@ -15,14 +15,14 @@
 @schema WeightInspectRequest {
   model WeightModel
   include_sha256 bool
-  sample_elements int `validate:"gte=0,lte=32"`
+  sample_elements uint64 `validate:"gte=0,lte=32"`
 }
 
 @schema WeightEdit {
   tensor string `validate:"required"`
-  index int `validate:"gte=0"`
+  index uint64 `validate:"gte=0"`
   delta float64
-  expected_value float64
+  expected_value *float64
 }
 
 @schema WeightPatchRequest {

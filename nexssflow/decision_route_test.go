@@ -107,17 +107,29 @@ func runDecisionRouter(t *testing.T, choice string, providerAErr error, decision
 		t.Fatalf("build router runner: %v", err)
 	}
 	input := map[string]any{
-		"task":                       "Route the request",
-		"request":                    "Resolve a test request",
-		"decision_attempt_id":        "decision-attempt-1",
-		"decision_provider":          "fake-decision",
-		"decision_model":             "decision-model",
-		"decision_rate_card_id":      decisionCardID,
-		"decision_expected_currency": "USD",
-		"decision_prompt_tokens":     10,
-		"decision_max_output_tokens": 5,
-		"candidate_a":                routerCandidate("candidate-a", "Candidate A", "candidate-attempt-a", "candidate-model-a", candidateACardID),
-		"candidate_b":                routerCandidate("candidate-b", "Candidate B", "candidate-attempt-b", "candidate-model-b", "candidate-card-b"),
+		"task":                          "Route the request",
+		"request":                       "Resolve a test request",
+		"decision_attempt_id":           "decision-attempt-1",
+		"decision_provider":             "fake-decision",
+		"decision_model":                "decision-model",
+		"decision_base_url":             "",
+		"decision_rate_card_id":         decisionCardID,
+		"decision_expected_currency":    "USD",
+		"decision_prompt_tokens":        10,
+		"decision_cached_prompt_tokens": 0,
+		"decision_max_output_tokens":    5,
+		"decision_allowed_ids":          []string{"candidate-a", "candidate-b"},
+		"decision_questions": []map[string]any{{
+			"id":           "route",
+			"type":         "choice",
+			"instructions": "Select exactly one configured candidate ID.",
+			"criteria": []map[string]any{
+				{"id": "candidate-a", "description": "Candidate A"},
+				{"id": "candidate-b", "description": "Candidate B"},
+			},
+		}},
+		"candidate_a": routerCandidate("candidate-a", "Candidate A", "candidate-attempt-a", "candidate-model-a", candidateACardID),
+		"candidate_b": routerCandidate("candidate-b", "Candidate B", "candidate-attempt-b", "candidate-model-b", "candidate-card-b"),
 	}
 	execution, runErr := runner.Execute(t.Context(), cfg, string(source), path, input)
 	return routerRun{execution: execution, err: runErr, a: a, b: b, decision: decision}

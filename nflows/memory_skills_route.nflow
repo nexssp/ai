@@ -10,11 +10,6 @@
     draft: "draft"
 }
 
-@symbols memory_scopes {
-    conversation: "conversation"
-    user: "user"
-}
-
 @symbols outcomes {
     unknown_route: "unknown_route"
     memory_unavailable: "memory_unavailable"
@@ -22,17 +17,18 @@
 
 @schema MemorySkillsRequest {
     route string `validate:"required,oneof=memory skill draft"`
-    user_id string
-    conversation_id string
-    memory_scope string `validate:"omitempty,oneof=conversation user"`
-    user_message string
-    remember bool
-    skill_name string
-    draft_name string
-    draft_instructions string
+    user_id *string
+    conversation_id *string
+    memory_scope *string `validate:"omitempty,oneof=conversation user"`
+    user_message *string
+    remember *bool
+    skill_name *string
+    draft_name *string
+    draft_instructions *string
 }
 
 @pipeline reply_with_memory
+  :request-schema=!MemorySkillsRequest
     {
         .user_id,
         .conversation_id,
@@ -41,32 +37,36 @@
         .remember
     }
     -> match {
-        .memory_scope == memory_scopes.user -> {
-            scope: { .user_id, .conversation_id, memory_scope: memory_scopes.user },
+        .memory_scope == "user"
+          -> {
+            scope: { .user_id, .conversation_id, memory_scope: "user" },
             .user_message,
             .remember
         },
-        _ -> {
-            scope: { .user_id, .conversation_id, memory_scope: memory_scopes.conversation },
+        _
+          -> {
+            scope: { .user_id, .conversation_id, memory_scope: "conversation" },
             .user_message,
             .remember
         }
     }
     -> ai.memory.reply
     ? on_error {
-        xerr.KindUnavailable -> {status: outcomes.memory_unavailable, user_id: .input.user_id},
-        else -> error.reraise
+        xerr.KindUnavailable
+          -> {status: outcomes.memory_unavailable, user_id: .input.user_id},
+        else
+          -> error.reraise
     }
 @end
 
 @pipeline reply_with_skill
+  :request-schema=!MemorySkillsRequest
     {
         .skill_name,
         .user_message
     }
     -> {name: .skill_name}
     -> ai.skills.get
-    -> ai.nflow.view
     -> {
         system: .instructions,
         user: input.user_message,
@@ -76,6 +76,7 @@
 @end
 
 @pipeline propose_skill
+  :request-schema=!MemorySkillsRequest
     {
         name: .draft_name,
         instructions: .draft_instructions
@@ -84,7 +85,7 @@
 @end
 
 @pipeline route_request
-    :request-schema=!MemorySkillsRequest
+  :request-schema=!MemorySkillsRequest
     {
         .route,
         .user_id,
@@ -97,10 +98,14 @@
         .draft_instructions
     }
     -> match {
-        .route == routes.memory -> pipeline.reply_with_memory,
-        .route == routes.skill -> pipeline.reply_with_skill,
-        .route == routes.draft -> pipeline.propose_skill,
-        _ -> const @{status: outcomes.unknown_route, route: .route}
+        .route == routes.memory
+          -> pipeline.reply_with_memory,
+        .route == routes.skill
+          -> pipeline.reply_with_skill,
+        .route == routes.draft
+          -> pipeline.propose_skill,
+        _
+          -> const @{status: outcomes.unknown_route, route: .route}
     }
 @end
 

@@ -42,18 +42,23 @@ func TestFlowNestedTypedActionConversion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	source := `{
-		decision: {
-				attempt_id: "decision-attempt-1",
-				provider: "fake-decision",
-				model: "decision-model",
-				completion_tokens: 16,
-				max_output_tokens: 16,
-				state: {task: "route"},
-			questions: []
-		}
-	} -> test.read_nested`
-	execution, err := runner.Execute(context.Background(), cfg, source, "nested-decision-test.nflow", nil)
+	source := `@schema NestedDecisionDetails {
+		attempt_id string
+	}
+	@schema NestedDecisionInput {
+		attempt_id string
+		decision NestedDecisionDetails
+	}
+	@pipeline read_nested
+		:request-schema=!NestedDecisionInput
+		test.read_nested
+	@end
+	pipeline.read_nested`
+	flowInput := map[string]any{
+		"attempt_id": "decision-attempt-1",
+		"decision":   map[string]any{"attempt_id": "decision-attempt-1"},
+	}
+	execution, err := runner.Execute(context.Background(), cfg, source, "nested-decision-test.nflow", flowInput)
 	if err != nil {
 		t.Fatalf("runner.Execute: %v", err)
 	}

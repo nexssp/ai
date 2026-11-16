@@ -19,24 +19,35 @@
     api_key_env: "GROQ_SYNTHESIZER_API_KEY"
 }
 
+@schema NamedPromptInput {
+    task string `json:"task" validate:"required"`
+}
+
 @assert result.content != ""
 @assert result.provider == "groq"
 
-{
-    user: .task,
-    system: "You are the analyst. Give a concise first answer and state the main trade-off.",
-    max_tokens: 180,
-    temperature: 0.2
-} -> llm.analyst as analysis
--> {
-    user: "Review the analyst's answer, identify one weakness, and improve it:\n\n" + analysis.Content,
-    system: "You are the critic. Build on the previous answer rather than starting over.",
-    max_tokens: 180,
-    temperature: 0.2
-} -> llm.critic as critique
--> {
-    user: "Synthesize the analysis and critique into one balanced final answer.\n\nAnalyst: " + analysis.Content + "\n\nCritic: " + critique.Content,
-    system: "You are the synthesizer. Produce one concise final answer that preserves important caveats.",
-    max_tokens: 180,
-    temperature: 0.2
-} -> llm.synthesizer
+@pipeline three_named_groq
+  :request-schema=!NamedPromptInput
+    {
+        user: .task,
+        system: "You are the analyst. Give a concise first answer and state the main trade-off.",
+        max_tokens: 180,
+        temperature: 0.2
+    }
+      -> llm.analyst as analysis
+    -> {
+        user: "Review the analyst's answer, identify one weakness, and improve it:\n\n" + analysis.Content,
+        system: "You are the critic. Build on the previous answer rather than starting over.",
+        max_tokens: 180,
+        temperature: 0.2
+    }
+      -> llm.critic as critique
+    -> {
+        user: "Synthesize the analysis and critique into one balanced final answer.\n\nAnalyst: " + analysis.Content + "\n\nCritic: " + critique.Content,
+        system: "You are the synthesizer. Produce one concise final answer that preserves important caveats.",
+        max_tokens: 180,
+        temperature: 0.2
+    }
+      -> llm.synthesizer
+@end
+pipeline.three_named_groq

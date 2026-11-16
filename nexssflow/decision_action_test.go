@@ -195,26 +195,73 @@ func TestNFlowOwnsDecisionRoutingGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	source := `{
-		attempt_id: "decision-attempt-1",
-		max_output_tokens: 16,
-		state: {task: "route"},
-	    allowed_ids: ["candidate-a", "candidate-b"],
-	    questions: [{id: "route", type: "choice", criteria: [
-	        {id: "candidate-a", description: "A"},
-	        {id: "candidate-b", description: "B"}
-		    ]}],
-		candidates: [
-			{id: "candidate-a", description: "A", attempt: {candidate_id: "candidate-a", attempt_id: "candidate-attempt-a", provider: "fake", model: "model-a", rate_card_id: "rate-a", expected_currency: "EUR", prompt_tokens: 10, completion_tokens: 5, user: "request"}},
-			{id: "candidate-b", description: "B", attempt: {candidate_id: "candidate-b", attempt_id: "candidate-attempt-b", provider: "fake", model: "model-b", rate_card_id: "rate-b", expected_currency: "EUR", prompt_tokens: 10, completion_tokens: 5, user: "request"}}
-		]
-		} -> ai.decide -> ai.nflow.view as decision_result
+	source := `@schema TestDecisionState {
+		task string
+	}
+	@schema TestDecisionCriterion {
+		id string
+		description string
+	}
+	@schema TestDecisionQuestion {
+		id string
+		type string
+		instructions string
+		criteria []TestDecisionCriterion
+	}
+	@schema TestDecisionAttempt {
+		candidate_id string
+		attempt_id string
+		provider string
+		model string
+		rate_card_id string
+		expected_currency string
+		prompt_tokens int
+		completion_tokens int
+		user string
+	}
+	@schema TestDecisionCandidate {
+		id string
+		description string
+		attempt TestDecisionAttempt
+	}
+	@schema TestDecisionInput {
+		attempt_id string
+		max_output_tokens int
+		state TestDecisionState
+		allowed_ids []string
+		questions []TestDecisionQuestion
+		candidates []TestDecisionCandidate
+	}
+	@pipeline decision_route_test
+		:request-schema=!TestDecisionInput
+		ai.decide -> ai.nflow.view as decision_result
 		-> match {
 			decision_result.answers[0].choice == "candidate-a" -> const @{route: "candidate-a"},
 			decision_result.answers[0].choice == "candidate-b" && decision_result.attempt_id == "decision-attempt-1" && decision_result.candidates[1].attempt.model == "model-b" -> const @{route: "candidate-b"},
-		    _ -> const @{route: "manual-review"},
-		}`
-	execution, err := runner.Execute(context.Background(), cfg, source, "decision-route-test.nflow", nil)
+			_ -> const @{route: "manual-review"},
+		}
+	@end
+	pipeline.decision_route_test`
+	input := map[string]any{
+		"attempt_id":        "decision-attempt-1",
+		"max_output_tokens": 16,
+		"state":             map[string]any{"task": "route"},
+		"allowed_ids":       []string{"candidate-a", "candidate-b"},
+		"questions": []map[string]any{{
+			"id":           "route",
+			"type":         "choice",
+			"instructions": "Select exactly one candidate.",
+			"criteria": []map[string]any{
+				{"id": "candidate-a", "description": "A"},
+				{"id": "candidate-b", "description": "B"},
+			},
+		}},
+		"candidates": []map[string]any{
+			{"id": "candidate-a", "description": "A", "attempt": map[string]any{"candidate_id": "candidate-a", "attempt_id": "candidate-attempt-a", "provider": "fake", "model": "model-a", "rate_card_id": "rate-a", "expected_currency": "EUR", "prompt_tokens": 10, "completion_tokens": 5, "user": "request"}},
+			{"id": "candidate-b", "description": "B", "attempt": map[string]any{"candidate_id": "candidate-b", "attempt_id": "candidate-attempt-b", "provider": "fake", "model": "model-b", "rate_card_id": "rate-b", "expected_currency": "EUR", "prompt_tokens": 10, "completion_tokens": 5, "user": "request"}},
+		},
+	}
+	execution, err := runner.Execute(context.Background(), cfg, source, "decision-route-test.nflow", input)
 	if err != nil {
 		t.Fatalf("runner.Execute: %v", err)
 	}

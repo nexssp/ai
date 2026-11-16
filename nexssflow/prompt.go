@@ -21,8 +21,12 @@ func newPromptAction(global GlobalOptions) action.AnyAction {
 }
 
 // newPromptActionWith keeps provider construction injectable for deterministic tests.
-func newPromptActionWith(global GlobalOptions, build providerBuilder) *action.BuiltAction[PromptRequest, PromptResult] {
-	return action.New[PromptRequest, PromptResult]("ai.prompt", func(ctx context.Context, req PromptRequest) (PromptResult, error) {
+func newPromptActionWith(global GlobalOptions, build providerBuilder) *action.BuiltAction[flowPromptRequest, PromptResult] {
+	return action.New[flowPromptRequest, PromptResult]("ai.prompt", func(ctx context.Context, flowRequest flowPromptRequest) (PromptResult, error) {
+		req, conversionErr := flowRequest.toDomain()
+		if conversionErr != nil {
+			return PromptResult{}, xerr.Validation("ai.prompt: invalid currency metadata: " + conversionErr.Error())
+		}
 		if err := validatePromptMessages(req); err != nil {
 			return PromptResult{}, err
 		}

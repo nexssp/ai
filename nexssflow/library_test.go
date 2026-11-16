@@ -189,13 +189,13 @@ func TestPipelineToolSpecsDeriveFromNFlowMetadata(t *testing.T) {
   :tool-description="Search for a query in text."
   noop
 @end
-@pipeline ask_with_tools
-  noop as request
-  -> ai.tool_specs as prepared
-  -> {
-      user: "Count these words.",
-      tools: prepared.ai_tool_specs,
-      tool_choice: "required"
+	@pipeline ask_with_tools
+	  noop as request
+	  -> ai.tool_specs.list as prepared
+	  -> {
+	      user: "Count these words.",
+	      tools: prepared,
+	      tool_choice: "required"
     } -> ai.prompt
 @end
 pipeline.ask_with_tools`
@@ -239,7 +239,7 @@ pipeline.ask_with_tools`
 	if !ok || query["type"] != "string" {
 		t.Fatalf("query property schema = %#v, want string", properties["query"])
 	}
-	required, ok := parameters["required"].([]string)
+	required, ok := stringList(parameters["required"])
 	if !ok || !slices.Equal(required, []string{"query"}) {
 		t.Fatalf("required fields = %#v, want [query]", parameters["required"])
 	}

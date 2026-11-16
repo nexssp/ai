@@ -19,6 +19,7 @@ const (
 	toolSchemaModifierName      = "tool-schema"
 	toolDescriptionModifierName = "tool-description"
 	toolSpecsActionName         = "ai.tool_specs"
+	toolSpecsListActionName     = "ai.tool_specs.list"
 	toolSpecsFieldName          = "ai_tool_specs"
 )
 
@@ -62,10 +63,13 @@ func pipelineToolSpecsMaterializer() compiler.Materializer {
 			output[toolSpecsFieldName] = append([]llm.ToolSpec(nil), specs...)
 			return output, nil
 		}).Description("Attach function tool specs derived from @pipeline and @schema declarations").Tag("ai", "tools").Build()
+		listAct := action.New(toolSpecsListActionName, func(_ context.Context, _ any) ([]llm.ToolSpec, error) {
+			return append([]llm.ToolSpec(nil), specs...), nil
+		}).Description("Return function tool specs derived from @pipeline and @schema declarations").Tag("ai", "tools").Build()
 		owner := compiler.DeclarationOwner(req.Meta, ID, "tool_specs", toolSpecsActionName)
 		if err := req.Resolver.Mount(action.Library{
 			Name:    owner,
-			Actions: []action.AnyAction{act},
+			Actions: []action.AnyAction{act, listAct},
 		}); err != nil {
 			return xerr.Internal("ai: mount pipeline tool spec action", err)
 		}

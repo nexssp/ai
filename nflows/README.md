@@ -1,6 +1,6 @@
 # ai as a reusable NFlow package
 
-`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.67.1`; the `nflow` runtime/CLI is installed separately from the Go module.
+`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.80.2`; the `nflow` runtime/CLI is installed separately from the Go module.
 
 ## Load the package
 
@@ -16,13 +16,13 @@ Set `LLM_PROVIDER` to any provider supported by `engine/llm`, and provide `LLM_M
 
 ## Typed actions
 
-The library exports `ai.prompt`, `ai.tool_specs`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action is backed by a Go request struct and a typed result. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
+The library exports `ai.prompt`, `ai.tool_specs`, `ai.tool_specs.list`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action has a typed contract. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
 
 ## Function tools from NFlow metadata
 
 Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-callable function only when it declares both `:tool-schema=SchemaName` and `:tool-description="..."`. The pipeline's name becomes the function name, the description comes from its modifier, and `ai.tool_specs` converts the referenced `@schema` into provider-ready parameters. Prefix the schema name with `!` (for example, `:tool-schema=!NoArguments`) to emit `additionalProperties: false`. This tool-argument schema is independent of `:in-schema` and `:out-schema`, so internal task envelopes and dispatch metadata need not be exposed to the model. A schema with an empty body, such as `@schema NoArguments {}`, represents a zero-property object.
 
-`ai.tool_specs` preserves the current pipeline state and adds the generated declarations under `ai_tool_specs`; pass that value as `tools` to `ai.prompt`:
+`ai.tool_specs.list` returns the generated declarations as a typed `[]llm.ToolSpec`, ready to pass to `ai.prompt`. The original `ai.tool_specs` action remains available for map-based workflows: it preserves current state and adds `ai_tool_specs` to its dynamic map result. Prefer the list action when calling typed actions; a dynamic map projection is intentionally not treated as a statically typed tool slice.
 
 ```nflow
 @schema CountArguments {
@@ -35,9 +35,8 @@ Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-cal
 @end
 
 @pipeline ask
-  noop as request
-  -> ai.tool_specs as prepared
-  -> { user: request.query, tools: prepared.ai_tool_specs } -> ai.prompt
+  ai.tool_specs.list as tools
+  -> { user: "Use the available count_words tool to count a supplied query.", tools: tools } -> ai.prompt
 @end
 ```
 
@@ -74,7 +73,7 @@ if err != nil {
 }
 ```
 
-[`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.67.1` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
+[`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.80.2` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
 
 ## Conversation memory and host-approved skills
 
