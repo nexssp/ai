@@ -30,7 +30,7 @@
     -> ai.decide
     -> ai.nflow.view as decision
     -> match {
-        decision.answers[0].choice == "hold" -> const @{status: "held_for_human_review", output_written: false},
+        decision.answers[0].choice == "hold" -> {status: "held_for_human_review", output_written: false},
         decision.answers[0].choice == "small_positive" -> {
             model: input.model,
             output_path: input.output_path,
@@ -38,7 +38,7 @@
             edits: [{tensor: input.coordinate.tensor, index: input.coordinate.index, delta: 0.0001, expected_value: input.current_value}],
             overwrite: false
         } -> weights.pipeline.patch -> ai.nflow.view as patch_result
-        -> const @{status: "human_review_candidate", choice: "small_positive", output_written: true, result: .patch_result},
+        -> {status: "human_review_candidate", choice: "small_positive", output_written: true, result: .patch_result},
         decision.answers[0].choice == "small_negative" -> {
             model: input.model,
             output_path: input.output_path,
@@ -46,8 +46,8 @@
             edits: [{tensor: input.coordinate.tensor, index: input.coordinate.index, delta: -0.0001, expected_value: input.current_value}],
             overwrite: false
         } -> weights.pipeline.patch -> ai.nflow.view as patch_result
-        -> const @{status: "human_review_candidate", choice: "small_negative", output_written: true, result: .patch_result},
-        _ -> const @{status: "manual_review", output_written: false}
+        -> {status: "human_review_candidate", choice: "small_negative", output_written: true, result: .patch_result},
+        _ -> {status: "manual_review", output_written: false}
     }
 @end
 pipeline.weekly_candidate

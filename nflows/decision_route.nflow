@@ -163,7 +163,7 @@
     -> ai.nflow.view as cost_view
     -> match {
         cost_view.known == false
-          -> const @{status: "fallback_preflight_rejected", .candidate_id, .attempt_id, .issue, provider_called: false},
+          -> {status: "fallback_preflight_rejected", .candidate_id, .attempt_id, .issue, provider_called: false},
         cost_view.known == true
           -> {
             candidate_id: __root__.prompt.candidate_id,
@@ -245,7 +245,7 @@
     -> ai.nflow.view as cost_view
     -> match {
         cost_view.known == false
-          -> const @{status: "primary_preflight_rejected", .candidate_id, .attempt_id, .issue, fallback_invoked: false},
+          -> {status: "primary_preflight_rejected", .candidate_id, .attempt_id, .issue, fallback_invoked: false},
         cost_view.known == true
           -> {
             candidate_id: __root__.prompt.candidate_id,
@@ -301,7 +301,7 @@
     -> ai.nflow.view as cost_view
     -> match {
         cost_view.known == false
-          -> const @{status: "decision_preflight_rejected", .attempt_id, .issue, provider_called: false},
+          -> {status: "decision_preflight_rejected", .attempt_id, .issue, provider_called: false},
         cost_view.known == true
           -> {
             attempt_id: __root__.decision.attempt_id,
@@ -328,7 +328,7 @@
               -> {primary: __root__.candidates[1].attempt, fallback: __root__.candidates[0].attempt}
               -> pipeline.primary_attempt,
             _
-              -> const @{status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
+              -> {status: "manual_review", reason: "decision_not_in_candidate_allowlist"}
           }
     }
 @end

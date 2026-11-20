@@ -32,7 +32,7 @@
     -> ai.decide
     -> ai.nflow.view as decision
     -> match {
-        decision.answers[0].choice == "hold" -> const @{status: "held", output_written: false},
+        decision.answers[0].choice == "hold" -> {status: "held", output_written: false},
         decision.answers[0].choice == "apply_pair" -> {
             model: input.model,
             output_path: input.output_path,
@@ -40,8 +40,8 @@
             edits: [{tensor: input.coordinate_a.tensor, index: input.coordinate_a.index, delta: 0.0001, expected_value: input.current_value_a}, {tensor: input.coordinate_b.tensor, index: input.coordinate_b.index, delta: -0.0001, expected_value: input.current_value_b}],
             overwrite: false
         } -> weights.pipeline.patch -> ai.nflow.view as patch_result
-        -> const @{status: "toy_copy_written", choice: "apply_pair", output_written: true, result: .patch_result},
-        _ -> const @{status: "manual_review", output_written: false}
+        -> {status: "toy_copy_written", choice: "apply_pair", output_written: true, result: .patch_result},
+        _ -> {status: "manual_review", output_written: false}
     }
 @end
 pipeline.toy_pair

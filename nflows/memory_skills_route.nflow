@@ -105,7 +105,7 @@
         .route == routes.draft
           -> pipeline.propose_skill,
         _
-          -> const @{status: outcomes.unknown_route, route: .route}
+          -> {status: outcomes.unknown_route, route: .route}
     }
 @end
 

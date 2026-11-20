@@ -5,26 +5,26 @@
 @assert: result.content != ""
 
 (
-    ai.prompt @{
+    ai.prompt(
         system: "ROLE: ANALYST. Identify the reliability trade-offs and likely failure modes.",
         user: "Assess reliability risks and expected failure modes for a 30-second API timeout.",
         max_tokens: 250,
         temperature: 0.2
-    }
+    )
     &
-    ai.prompt @{
+    ai.prompt(
         system: "ROLE: SECURITY. Focus on abuse risks, resource exhaustion, and safe limits.",
         user: "Assess security and abuse risks of a 30-second API timeout.",
         max_tokens: 250,
         temperature: 0.2
-    }
+    )
     &
-    ai.prompt @{
+    ai.prompt(
         system: "ROLE: IMPLEMENTER. Recommend a concrete implementation approach.",
         user: "Recommend an implementation strategy for a 30-second API timeout.",
         max_tokens: 250,
         temperature: 0.2
-    }
+    )
 )
 -> {
     system: "ROLE: SYNTHESIS. Combine the independent findings without dropping important trade-offs.",
