@@ -55,8 +55,8 @@ For non-stream calls, the observer receives route, model, candidate/attempt/rate
 ## Ownership boundaries
 
 - Keep model routing policy, request gates, and AI-specific cache/RAG/memory semantics in the application or `nexssp/ai`. The [`retrieval`](../retrieval) package owns chunking, embeddings, search semantics, prompt assembly, and the `VectorIndex` adapter boundary; [`memory`](../memory) remains the separate conversation-memory service.
-- Keep generic persistence capabilities and backend adapters in [`nexssp/storage`](https://github.com/nexssp/storage/tree/v0.5.0). Do not add model selection, embeddings, RAG, prompt policy, or semantic similarity behavior to that general storage module. A vector backend should implement the AI-owned `retrieval.VectorIndex` contract in an adapter.
-- Keep MCP protocol servers and transport concerns in [`nexssp/transportai/tmcp`](https://github.com/nexssp/transportai/tree/v0.11.0/tmcp). A later AI client adapter can translate model tool calls to MCP calls without making the gateway own the protocol server.
+- Keep generic persistence capabilities and backend adapters in [`nexssp/storage`](https://github.com/nexssp/storage/tree/v0.7.2). Do not add model selection, embeddings, RAG, prompt policy, or semantic similarity behavior to that general storage module. A vector backend should implement the AI-owned `retrieval.VectorIndex` contract in an adapter.
+- Keep MCP protocol servers and transport concerns in [`nexssp/transportai/tmcp`](https://github.com/nexssp/transportai/tree/v0.12.0/tmcp). A later AI client adapter can translate model tool calls to MCP calls without making the gateway own the protocol server.
 - Keep the application host as the authority for durable budget reservations/settlement, authorization, audit retention, and retry policy.
 
 The retrieval package supplies a basic vector-search/RAG core and adapter extension point, but no persistent vector database, semantic cache, MCP client, tool-execution loop, persistent agent harness, or evaluation framework is bundled here.

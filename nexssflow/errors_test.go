@@ -280,8 +280,8 @@ func TestRunnerOnErrorSeesBundleTimeoutValidationForBothActions(t *testing.T) {
 		name   string
 		source string
 	}{
-		{"ai.prompt", `ai.prompt @{ user: "hello" } ? on_error { xerr.KindValidation -> { handled: true, kind: "Validation" }, else -> error.reraise }`},
-		{"ai.team", `ai.team @{ goal: "hello", agents: [{name: "planner", role: "planner", instructions: "plan"}, {name: "reviewer", role: "reviewer", instructions: "review"}] } ? on_error { xerr.KindValidation -> { handled: true, kind: "Validation" }, else -> error.reraise }`},
+		{"ai.prompt", `ai.prompt(user: "hello") ? on_error { xerr.KindValidation -> { handled: true, kind: "Validation" }, else -> error.reraise }`},
+		{"ai.team", `ai.team(goal: "hello", agents: [{name: "planner", role: "planner", instructions: "plan"}, {name: "reviewer", role: "reviewer", instructions: "review"}]) ? on_error { xerr.KindValidation -> { handled: true, kind: "Validation" }, else -> error.reraise }`},
 	}
 	cfg, err := runner.BuildConfig(append(native.Bundles(), Bundle(map[string]string{"timeout": "bad"})))
 	if err != nil {

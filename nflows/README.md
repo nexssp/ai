@@ -1,6 +1,6 @@
 # ai as a reusable NFlow package
 
-`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.80.2`; the `nflow` runtime/CLI is installed separately from the Go module.
+`nexssflow` keeps provider protocols, HTTP requests, credentials, timeouts, and normalized errors in Go, while NFlow defines orchestration, routing graphs, and reusable workflow logic. This checkout uses Flow `v0.94.2`; the `nflow` runtime/CLI is installed separately from the Go module.
 
 ## Load the package
 
@@ -73,11 +73,11 @@ if err != nil {
 }
 ```
 
-[`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.80.2` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
+[`retrieval_rag.nflow`](retrieval_rag.nflow) contains strict, snake_case `@schema` contracts and reusable pipelines for indexing, deletion, search, and answering. Its root pipeline runs `answer`; the integration test executes each pipeline through Flow `v0.94.2` using an in-memory index and fake embedder/provider. A host must inject the retrieval service before running the example. `MemoryIndex` is only for tests and local demonstrations; production persistence should use a host-selected adapter.
 
 ## Conversation memory and host-approved skills
 
-The [`memory_skills_route.nflow`](memory_skills_route.nflow) example routes requests among `ai.memory.reply`, `ai.skills.get` plus `ai.prompt`, and `ai.skills.draft`. The NFlow `@symbols` keep route/scope labels finite, same-name projections pass typed fields without repeating source/target names, and the memory error handler uses `.input.user_id` to preserve the original routed identity.
+The [`memory_skills_route.nflow`](memory_skills_route.nflow) example routes requests among `ai.memory.reply`, `ai.skills.get` plus `ai.prompt`, and `ai.skills.draft`. The NFlow `@symbols` keep route/scope labels finite, same-name projections pass typed fields without repeating source/target names, and the memory error handler uses `input.user_id` to preserve the original routed identity.
 
 Memory working history always stays scoped to both `user_id` and `conversation_id`. The explicit `memory_scope` field controls only long-term recall/promotion: `conversation` stays in that conversation, while `user` is shared across that user's conversations. Omission preserves the legacy conversation-scoped behavior. The host must set both identity fields from authenticated session state; the long-term adapter must honor `UserID`, with user-scoped calls receiving an empty `ConversationID`.
 
@@ -105,7 +105,7 @@ See [`../memory/README.md`](../memory/README.md) for scope-aware backend contrac
 The bundle embeds [`lib/weights.nflow`](lib/weights.nflow), which provides `weights.pipeline.list_adapters`, `weights.pipeline.inspect`, and `weights.pipeline.patch` after the module is imported. Implemented adapters are `safetensors.scalar-delta.v1` for single or standard indexed-sharded SafeTensors and `gguf.float-scalar-delta.v1` for a single little-endian GGUF v2/v3 file. Paths are workspace-relative to the process working directory and confined through Nexss `kernel/xfs`; outputs are distinct from all source files.
 
 ```nflow
-@require github.com/nexssp/ai main as ai
+@require github.com/nexssp/ai v0.7.0 as ai
 @include ai:nflows/lib/weights.nflow AS weights
 
 {
@@ -162,6 +162,5 @@ The critic sends the goal and proposed output as explicit prompt context and ask
 The tests use fake providers and need no live API credentials:
 
 ```sh
-go test ./...
-task check
+task test
 ```

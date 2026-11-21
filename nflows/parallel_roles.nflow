@@ -28,7 +28,7 @@
 )
 -> {
     system: "ROLE: SYNTHESIS. Combine the independent findings without dropping important trade-offs.",
-    user: "Combine independent findings in source order:\nAnalyst: " + .["ai.prompt#1"].content + "\nSecurity: " + .["ai.prompt#2"].content + "\nImplementation: " + .["ai.prompt#3"].content,
+    user: ("Combine independent findings in source order:\nAnalyst: " + string(.["ai.prompt#1"].content) + "\nSecurity: " + string(.["ai.prompt#2"].content) + "\nImplementation: " + string(.["ai.prompt#3"].content)),
     max_tokens: 500,
     temperature: 0.2
 }

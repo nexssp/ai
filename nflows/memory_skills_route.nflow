@@ -53,7 +53,7 @@
     -> ai.memory.reply
     ? on_error {
         xerr.KindUnavailable
-          -> {status: outcomes.memory_unavailable, user_id: .input.user_id},
+          -> {status: outcomes.memory_unavailable, user_id: input.user_id},
         else
           -> error.reraise
     }

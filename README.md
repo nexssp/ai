@@ -110,10 +110,10 @@ Replace the zeroes and model ID with values verified for the account and provide
 
 ## Use from Nexss Flow
 
-The Flow bundle is provided by `github.com/nexssp/ai/nexssflow`. In a workflow, select the current branch with the separate `main` version selector and replace the chat model placeholder with an ID supported by the configured account:
+The Flow bundle is provided by `github.com/nexssp/ai/nexssflow`. In a workflow, select the latest published release (`v0.7.0`) and replace the chat model placeholder with an ID supported by the configured account:
 
 ```nflow
-@require github.com/nexssp/ai main as ai {
+@require github.com/nexssp/ai v0.7.0 as ai {
     timeout: "30s"
 }
 

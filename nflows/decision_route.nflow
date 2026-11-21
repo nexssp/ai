@@ -191,19 +191,19 @@
   :request-schema=!DecisionPromptInput
     ai.prompt ? on_error {
         xerr.KindTimeout
-          -> {attempt: .input.fallback}
+          -> {attempt: input.fallback}
           -> pipeline.fallback_attempt,
         xerr.KindUnavailable
-          -> {attempt: .input.fallback}
+          -> {attempt: input.fallback}
           -> pipeline.fallback_attempt,
         xerr.KindCircuitBreaker
-          -> {attempt: .input.fallback}
+          -> {attempt: input.fallback}
           -> pipeline.fallback_attempt,
         xerr.KindRateLimit
-          -> {attempt: .input.fallback}
+          -> {attempt: input.fallback}
           -> pipeline.fallback_attempt,
         xerr.KindTooManyRequests
-          -> {attempt: .input.fallback}
+          -> {attempt: input.fallback}
           -> pipeline.fallback_attempt,
         else
           -> error.reraise

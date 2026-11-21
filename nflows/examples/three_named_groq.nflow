@@ -1,7 +1,7 @@
 @description "Three named Groq LLM handles talk through an analyst, critic, and synthesizer"
 # This example is for trusted workflows only: @llm selects host environment keys and may select endpoints.
 # Shared or untrusted execution requires host-side secret isolation and credential/endpoint allowlisting.
-@require github.com/nexssp/ai main as ai
+@require github.com/nexssp/ai v0.7.0 as ai
 
 @llm analyst {
     provider: "groq",

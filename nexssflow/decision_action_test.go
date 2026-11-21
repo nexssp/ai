@@ -236,9 +236,9 @@ func TestNFlowOwnsDecisionRoutingGraph(t *testing.T) {
 		:request-schema=!TestDecisionInput
 		ai.decide -> ai.nflow.view as decision_result
 		-> match {
-			decision_result.answers[0].choice == "candidate-a" -> const @{route: "candidate-a"},
-			decision_result.answers[0].choice == "candidate-b" && decision_result.attempt_id == "decision-attempt-1" && decision_result.candidates[1].attempt.model == "model-b" -> const @{route: "candidate-b"},
-			_ -> const @{route: "manual-review"},
+			decision_result.answers[0].choice == "candidate-a" -> {route: "candidate-a"},
+			decision_result.answers[0].choice == "candidate-b" && decision_result.attempt_id == "decision-attempt-1" && decision_result.candidates[1].attempt.model == "model-b" -> {route: "candidate-b"},
+			_ -> {route: "manual-review"},
 		}
 	@end
 	pipeline.decision_route_test`

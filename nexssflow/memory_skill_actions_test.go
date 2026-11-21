@@ -155,7 +155,7 @@ func TestMemorySkillsRouteExampleUsesScopedServicesAndInertDrafts(t *testing.T) 
 		"user_message": "Use the fallback.",
 	})
 	if err != nil {
-		t.Fatalf("memory failure should use the `.input` fallback: %v", err)
+		t.Fatalf("memory failure should use the `input` fallback: %v", err)
 	}
 	fallback, ok := fallbackRun.Output.(map[string]any)
 	if !ok || fallback["status"] != "memory_unavailable" || fallback["user_id"] != "user-2" {

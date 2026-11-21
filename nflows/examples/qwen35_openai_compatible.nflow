@@ -6,7 +6,7 @@
 #   hf download Qwen/Qwen3.5-4B --revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a --local-dir ./models/qwen3.5-4b
 #   vllm serve ./models/qwen3.5-4b --served-model-name qwen35-4b --host 127.0.0.1 --port 8000
 # Use only a trusted workflow: named LLM declarations can choose endpoints and environment-variable names.
-@require github.com/nexssp/ai main as ai
+@require github.com/nexssp/ai v0.7.0 as ai
 
 @llm qwen_local {
     provider: "openai-compatible",
