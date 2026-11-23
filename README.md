@@ -62,6 +62,18 @@ func main() {
 
 A request can override its model and include messages, temperature, maximum tokens, JSON mode, tool definitions, or a typed reasoning-effort value where the selected provider/model supports it. `ai.prompt` accepts either its `user`/`system` shorthand or explicit `messages` history; use history to preserve the assistant tool-call message and matching tool-result message on a follow-up request. Non-streaming function tool calls currently work with the OpenAI-compatible provider family, including Inception and DeepSeek. The supported `tool_choice` modes are `auto`, `none`, and `required`; `ai.prompt` rejects tool requests when the selected provider does not advertise tool-call support. Anthropic, Gemini, and Ollama do not yet have native tool-call mappings, and streaming remains text-only. Other unsupported options are left to the provider API to reject; the shared interface does not claim identical capabilities across vendors.
 
+## Local deterministic OpenAI-compatible mock
+
+Run the small standard-library-only mock with an ordered script. Plain strings are assistant content; response objects can include `content`, function `tool_calls`, or an OpenAI-shaped `error` with an optional HTTP `status`:
+
+```sh
+go run github.com/nexssp/ai/cmd/mock-openai@main \
+  -listen 127.0.0.1:8765 \
+  -responses '["Analyst draft.",{"content":"Looking up a place.","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Warsaw\"}"}}]},{"status":400,"error":{"message":"Scripted failure","type":"invalid_request_error","code":"mock_error"}}]'
+```
+
+It serves `POST /v1/chat/completions` and returns one configured reply per request; an exhausted list is an explicit error. Point an `openai-compatible` provider at `http://127.0.0.1:8765/v1`. It makes no provider calls and needs no real API key. It accepts only loopback IP literals (`127.0.0.0/8` or `::1`) and rejects other bind addresses. Stop it with Ctrl+C.
+
 ## Packages
 
 | Package | What it provides |
