@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nexssp/transport/thttp"
+
 	"github.com/nexssp/ai/engine/llm"
 )
 
@@ -41,5 +43,42 @@ func TestLineStreamSinkIgnoresNonTokenEvents(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatalf("non-token event wrote %q", output.String())
+	}
+}
+
+type captureTransportStreamWriter struct {
+	events []any
+}
+
+func (writer *captureTransportStreamWriter) WriteEvent(ctx context.Context, event any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	writer.events = append(writer.events, event)
+	return nil
+}
+
+func TestStreamSinkForUsesTransportWriter(t *testing.T) {
+	writer := &captureTransportStreamWriter{}
+	ctx := thttp.WithStreamEventWriter(context.Background(), writer)
+	sink := streamSinkFor(ctx)
+	if sink == nil {
+		t.Fatal("streamSinkFor returned nil")
+	}
+	if err := sink.Emit(ctx, llm.StreamEvent{Kind: llm.EventTokenDelta, Delta: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Emit(ctx, llm.StreamEvent{Kind: llm.EventCompletionFinished}); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("events = %v, want one token event", writer.events)
+	}
+	event, ok := writer.events[0].(thttp.StreamEvent)
+	if !ok {
+		t.Fatalf("event type = %T, want thttp.StreamEvent", writer.events[0])
+	}
+	if event.Type != "token.delta" || event.Delta != "hello" {
+		t.Fatalf("event = %+v, want token.delta with exact delta", event)
 	}
 }

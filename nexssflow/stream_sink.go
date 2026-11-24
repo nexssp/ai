@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 
+	"github.com/nexssp/transport/thttp"
+
 	"github.com/nexssp/ai/engine/llm"
 )
 
@@ -45,9 +47,26 @@ func (sink lineStreamSink) Emit(ctx context.Context, event llm.StreamEvent) erro
 	return nil
 }
 
+type transportStreamSink struct {
+	writer thttp.StreamEventWriter
+}
+
+func (sink transportStreamSink) Emit(ctx context.Context, event llm.StreamEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if event.Kind != llm.EventTokenDelta {
+		return nil
+	}
+	return sink.writer.WriteEvent(ctx, thttp.StreamEvent{Type: event.Kind.String(), Delta: event.Delta})
+}
+
 func streamSinkFor(ctx context.Context) llm.StreamSink {
 	if sink, ok := llm.StreamSinkFromContext(ctx); ok {
 		return sink
+	}
+	if writer, ok := thttp.StreamEventWriterFromContext(ctx); ok {
+		return transportStreamSink{writer: writer}
 	}
 	if os.Getenv(streamEventsEnv) == streamEventsStdout {
 		return lineStreamSink{writer: os.Stdout}
