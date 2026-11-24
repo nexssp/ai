@@ -38,7 +38,7 @@ func (p *fakeProvider) Complete(_ context.Context, req llm.Request) (llm.Respons
 	if model == "" {
 		model = "fake-model"
 	}
-	if len(p.response.ToolCalls) > 0 {
+	if len(p.response.ToolCalls) > 0 || p.response.Content != "" {
 		response := p.response
 		if response.Model == "" {
 			response.Model = model
@@ -53,6 +53,10 @@ func (p *fakeProvider) Stream(context.Context, llm.Request) (iter.Seq2[string, e
 }
 
 func (p *fakeProvider) SupportsToolCalls() bool { return true }
+
+func (p *fakeProvider) SupportsToolChoice(choice llm.ToolChoice) bool {
+	return choice == llm.ToolChoiceAuto || choice == llm.ToolChoiceNone || choice == llm.ToolChoiceRequired
+}
 
 func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	factory, ok := compiler.Lookup(ID)
@@ -142,6 +146,7 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 	if resolvedGlobal.DefaultModel != "configured-model" || provider.request.Model != "" || len(provider.request.Messages) != 2 || provider.request.Messages[0].Content != "Be concise" || provider.request.Messages[1].Content != "What is 2+2?" || len(provider.request.Tools) != 1 || provider.request.Tools[0].Function.Name != "count_words" || provider.request.ToolChoice != llm.ToolChoiceRequired {
 		t.Fatalf("unexpected AI request: %+v", provider.request)
 	}
+	provider.response.ToolCalls = nil
 	roundtrip, err := runner.Execute(context.Background(), cfg, "ai.prompt", "tool-roundtrip.nflow", map[string]any{
 		"messages": []any{
 			map[string]any{"role": "system", "content": "Use the tool result."},
@@ -164,7 +169,7 @@ func TestBundleRegistersAndRunsTypedPromptActionThroughFlow(t *testing.T) {
 }
 
 func TestPipelineToolSpecsDeriveFromNFlowMetadata(t *testing.T) {
-	provider := &fakeProvider{}
+	provider := &schemaCapableFakeProvider{fakeProvider: &fakeProvider{}}
 	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
 		return provider, nil
 	})
@@ -176,14 +181,18 @@ func TestPipelineToolSpecsDeriveFromNFlowMetadata(t *testing.T) {
 		t.Fatalf("BuildConfig: %v", err)
 	}
 	source := `@schema NoArguments {}
-@schema QueryArguments {
+	@schema QueryArguments {
 	  query string ` + "`json:\"query\" validate:\"required\"`" + `
-}
-@pipeline count_words
-  :tool-schema=!NoArguments
-  :tool-description="Count words in the supplied query."
-  noop
-@end
+	}
+	@schema CountResult {
+	  count int ` + "`validate:\"required\"`" + `
+	}
+	@pipeline count_words
+	  :tool-schema=!NoArguments
+	  :tool-description="Count words in the supplied query."
+	  :tool-result-schema=CountResult
+	  noop
+	@end
 @pipeline search_text
   :tool-schema=QueryArguments
   :tool-description="Search for a query in text."
@@ -223,6 +232,13 @@ pipeline.ask_with_tools`
 	if len(properties) != 0 {
 		t.Fatalf("empty tool properties = %#v, want no model arguments", properties)
 	}
+	resultSchema, err := llm.ParseJSONSchema(tool.Function.ResultSchema)
+	if err != nil {
+		t.Fatalf("parse host result schema: %v", err)
+	}
+	if resultSchema.Type != "object" || resultSchema.Properties["count"].Type != "integer" || !slices.Equal(resultSchema.Required, []string{"count"}) || resultSchema.AdditionalProperties == nil || *resultSchema.AdditionalProperties {
+		t.Fatalf("host result schema = %+v, want a required, closed count object", tool.Function.ResultSchema)
+	}
 	tool = provider.request.Tools[1]
 	if tool.Type != "function" || tool.Function.Name != "search_text" || tool.Function.Description != "Search for a query in text." {
 		t.Fatalf("second derived tool = %+v, want second pipeline name and description", tool)
@@ -242,6 +258,106 @@ pipeline.ask_with_tools`
 	required, ok := stringList(parameters["required"])
 	if !ok || !slices.Equal(required, []string{"query"}) {
 		t.Fatalf("required fields = %#v, want [query]", parameters["required"])
+	}
+}
+
+func TestSchemaContractsExposeRecursiveNFlowDeclarations(t *testing.T) {
+	provider := &schemaCapableFakeProvider{fakeProvider: &fakeProvider{response: llm.Response{Content: `{"value":"ok"}`}}}
+	bundle, err := NewBundleWithProviderBuilder(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+		return provider, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := runner.BuildConfig(append(native.Bundles(), bundle))
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	declarations := `@enum State { ready, done }
+@schema Child {
+  state State ` + "`validate:\"required\"`" + `
+  score int
+}
+@schema Parent {
+  child Child
+  items []Child
+  optional *string
+  payload any
+}
+@schema Output {
+  value string ` + "`validate:\"required\"`" + `
+}
+`
+	getSource := declarations + `@pipeline get_parent_schema
+  { name: "Parent" } -> ai.schemas.get
+@end
+pipeline.get_parent_schema`
+	got, err := runner.Execute(t.Context(), cfg, getSource, "schema-contract-get.nflow", map[string]any{})
+	if err != nil {
+		t.Fatalf("execute ai.schemas.get: %v", err)
+	}
+	schemaValue, ok := got.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("ai.schemas.get output type = %T, want a JSON object", got.Output)
+	}
+	schema, err := llm.ParseJSONSchema(schemaValue)
+	if err != nil {
+		t.Fatalf("parse ai.schemas.get output: %v", err)
+	}
+	closed := false
+	if schema.Type != "object" || schema.AdditionalProperties == nil || *schema.AdditionalProperties != closed {
+		t.Fatalf("parent contract is not a closed object: %+v", schema)
+	}
+	child := schema.Properties["child"]
+	if child.Type != "object" || child.Properties["state"].Type != "string" || !slices.Equal(child.Properties["state"].Enum, []string{"ready", "done"}) || !slices.Equal(child.Required, []string{"state"}) {
+		t.Fatalf("nested child contract = %+v", child)
+	}
+	items := schema.Properties["items"]
+	if items.Type != "array" || items.Items == nil || items.Items.Properties["score"].Type != "integer" {
+		t.Fatalf("nested array contract = %+v", items)
+	}
+	if optional := schema.Properties["optional"]; optional.Type != "string" || !optional.Nullable {
+		t.Fatalf("pointer field contract = %+v, want nullable string", optional)
+	}
+	if payload := schema.Properties["payload"]; payload.Type != "" {
+		t.Fatalf("unconstrained field type = %q, want omitted", payload.Type)
+	}
+
+	listSource := declarations + `@pipeline list_schemas
+  noop -> ai.schemas.list
+@end
+pipeline.list_schemas`
+	listed, err := runner.Execute(t.Context(), cfg, listSource, "schema-contract-list.nflow", map[string]any{})
+	if err != nil {
+		t.Fatalf("execute ai.schemas.list: %v", err)
+	}
+	contracts, ok := listed.Output.(map[string]map[string]any)
+	if !ok {
+		t.Fatalf("ai.schemas.list output = %#v", listed.Output)
+	}
+	parentContract, err := llm.ParseJSONSchema(contracts["Parent"])
+	if err != nil || parentContract.Properties["child"].Type != "object" {
+		t.Fatalf("ai.schemas.list Parent contract = %#v, err=%v", contracts["Parent"], err)
+	}
+	childContract, err := llm.ParseJSONSchema(contracts["Child"])
+	if err != nil || childContract.Properties["state"].Enum[1] != "done" {
+		t.Fatalf("ai.schemas.list Child contract = %#v, err=%v", contracts["Child"], err)
+	}
+
+	structuredSource := declarations + `@pipeline generate_structured
+  { name: "Output" } -> ai.schemas.get as contract
+  -> { user: "Return a JSON value.", output_schema: contract } -> ai.prompt
+@end
+pipeline.generate_structured`
+	structured, err := runner.Execute(t.Context(), cfg, structuredSource, "schema-contract-prompt.nflow", map[string]any{})
+	if err != nil {
+		t.Fatalf("use ai.schemas.get contract in ai.prompt: %v", err)
+	}
+	if result, ok := structured.Output.(PromptResult); !ok || result.Content != `{"value":"ok"}` {
+		t.Fatalf("structured NFlow output = %#v, want validated PromptResult", structured.Output)
+	}
+	if provider.request.OutputSchema == nil || provider.request.OutputSchema.Properties["value"].Type != "string" {
+		t.Fatalf("NFlow-derived output schema did not reach provider: %+v", provider.request.OutputSchema)
 	}
 }
 

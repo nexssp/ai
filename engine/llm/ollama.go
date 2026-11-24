@@ -29,11 +29,39 @@ type OllamaProvider struct {
 }
 
 type ollamaChatPayload struct {
-	Model     string    `json:"model"`
-	Messages  []Message `json:"messages"`
-	Stream    bool      `json:"stream"`
-	KeepAlive string    `json:"keep_alive"`
-	Format    string    `json:"format,omitempty"`
+	Model     string          `json:"model"`
+	Messages  []ollamaMessage `json:"messages"`
+	Stream    bool            `json:"stream"`
+	KeepAlive string          `json:"keep_alive"`
+	Format    any             `json:"format,omitempty"`
+	Tools     []ollamaTool    `json:"tools,omitempty"`
+}
+
+type ollamaMessage struct {
+	Role      Role             `json:"role"`
+	Content   string           `json:"content,omitempty"`
+	Name      string           `json:"name,omitempty"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
+}
+
+type ollamaTool struct {
+	Type     string             `json:"type"`
+	Function ollamaFunctionSpec `json:"function"`
+}
+
+type ollamaFunctionSpec struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Parameters  JSONSchema `json:"parameters"`
+}
+
+type ollamaToolCall struct {
+	Function ollamaFunctionCall `json:"function"`
+}
+
+type ollamaFunctionCall struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 type ollamaLifecyclePayload struct {
@@ -43,10 +71,11 @@ type ollamaLifecyclePayload struct {
 
 // ollamaWireResponse is the JSON shape of the /api/chat response.
 type ollamaWireResponse struct {
-	Model   string  `json:"model"`
-	Message Message `json:"message"`
-	Prompt  int     `json:"prompt_eval_count"`
-	Eval    int     `json:"eval_count"`
+	Model      string        `json:"model"`
+	Message    ollamaMessage `json:"message"`
+	Prompt     int           `json:"prompt_eval_count"`
+	Eval       int           `json:"eval_count"`
+	DoneReason string        `json:"done_reason"`
 }
 
 type ollamaStreamChunk struct {
@@ -97,9 +126,9 @@ func NewOllama(cfg Config) *OllamaProvider {
 			return Response{}, xerr.Validation("ollama: model is required in the request or provider configuration")
 		}
 
-		payload := ollamaChatPayload{Model: req.Model, Messages: req.Messages, KeepAlive: keepAlive24h}
-		if req.JSONMode {
-			payload.Format = "json"
+		payload, err := p.buildPayload(req, false)
+		if err != nil {
+			return Response{}, err
 		}
 
 		headers := map[string]string{}
@@ -119,11 +148,21 @@ func NewOllama(cfg Config) *OllamaProvider {
 			return Response{}, err
 		}
 
+		toolCalls := make([]ToolCall, 0, len(raw.Message.ToolCalls))
+		for index, call := range raw.Message.ToolCalls {
+			arguments, err := json.Marshal(call.Function.Arguments)
+			if err != nil {
+				return Response{}, xerr.Internal("ollama: encode tool call arguments failed", err)
+			}
+			toolCalls = append(toolCalls, ToolCall{ID: fmt.Sprintf("ollama-call-%d-%d", start.UnixNano(), index), Type: toolTypeFunction, Function: FunctionCall{Name: call.Function.Name, Arguments: string(arguments)}})
+		}
 		return Response{
 			Content:      raw.Message.Content,
 			Model:        raw.Model,
 			PromptTokens: raw.Prompt,
 			CompTokens:   raw.Eval,
+			ToolCalls:    toolCalls,
+			FinishReason: raw.DoneReason,
 			Duration:     time.Since(start),
 		}, nil
 	}).
@@ -143,6 +182,68 @@ func (p *OllamaProvider) Name() string {
 	return providerOllama
 }
 
+func (p *OllamaProvider) SupportsToolCalls() bool { return true }
+
+func (p *OllamaProvider) SupportsToolChoice(choice ToolChoice) bool {
+	return choice == ToolChoiceAuto
+}
+
+func (p *OllamaProvider) Capabilities(model string) ProviderCapabilities {
+	return CapabilitiesForRoute(p.Name(), configuredModel(model, p.cfg.DefaultModel), p.cfg.BaseURL)
+}
+
+func (p *OllamaProvider) SupportsOutputSchema(model string, schema JSONSchema, withTools bool) (supported bool, reason string) {
+	capabilities := p.Capabilities(model)
+	level := capabilities.OutputSchema
+	if withTools {
+		level = capabilities.OutputSchemaWithTools
+	}
+	if level != CapabilitySupported && level != CapabilityConditional {
+		return false, "route capability is " + string(level)
+	}
+	if err := schema.ValidateDefinition(); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+func (p *OllamaProvider) buildPayload(req Request, stream bool) (ollamaChatPayload, error) {
+	payload := ollamaChatPayload{Model: req.Model, Stream: stream, KeepAlive: keepAlive24h}
+	if req.OutputSchema != nil {
+		payload.Format = *req.OutputSchema
+	} else if req.JSONMode {
+		payload.Format = "json"
+	}
+	for _, message := range req.Messages {
+		converted := ollamaMessage{Role: message.Role, Content: message.Content, Name: message.Name}
+		for _, call := range message.ToolCalls {
+			arguments, err := DecodeJSONValue(call.Function.Arguments)
+			if err != nil {
+				return ollamaChatPayload{}, fmt.Errorf("ollama: tool call %q arguments: %w", call.Function.Name, err)
+			}
+			object, ok := arguments.(map[string]any)
+			if !ok {
+				return ollamaChatPayload{}, fmt.Errorf("ollama: tool call %q arguments must be a JSON object", call.Function.Name)
+			}
+			converted.ToolCalls = append(converted.ToolCalls, ollamaToolCall{Function: ollamaFunctionCall{Name: call.Function.Name, Arguments: object}})
+		}
+		payload.Messages = append(payload.Messages, converted)
+	}
+	if len(req.Tools) > 0 {
+		for _, spec := range req.Tools {
+			schema, err := ParseJSONSchema(spec.Function.Parameters)
+			if err != nil {
+				return ollamaChatPayload{}, fmt.Errorf("ollama: tool %q parameters: %w", spec.Function.Name, err)
+			}
+			payload.Tools = append(payload.Tools, ollamaTool{Type: spec.Type, Function: ollamaFunctionSpec{Name: spec.Function.Name, Description: spec.Function.Description, Parameters: schema}})
+		}
+	}
+	if req.ToolChoice != "" && req.ToolChoice != ToolChoiceAuto {
+		return ollamaChatPayload{}, fmt.Errorf("ollama: tool choice %q is not supported by the native /api/chat route", req.ToolChoice)
+	}
+	return payload, nil
+}
+
 func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	if req.Model == "" && p.cfg.DefaultModel == "" {
 		return Response{}, xerr.Validation("ollama: model is required in the request or provider configuration")
@@ -154,6 +255,9 @@ func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, e
 // stream:true sends one JSON object per line, terminated by a `done:true`
 // field.
 func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
+	if req.OutputSchema != nil || len(req.Tools) > 0 {
+		return nil, xerr.Validation("ollama: structured outputs and tool calls are not supported by the text-only streaming adapter")
+	}
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
 	}
@@ -161,7 +265,10 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 		return nil, xerr.Validation("ollama: model is required in the request or provider configuration")
 	}
 
-	payload := ollamaChatPayload{Model: req.Model, Messages: req.Messages, Stream: true, KeepAlive: keepAlive24h}
+	payload, err := p.buildPayload(req, true)
+	if err != nil {
+		return nil, err
+	}
 
 	bodyBytes, err := p.codec.Marshal(payload)
 	if err != nil {

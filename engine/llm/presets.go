@@ -113,7 +113,7 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 	}
 
 	switch pType {
-	case providerAnthropic, "claude":
+	case providerAnthropic, providerClaude:
 		if cfg.Name == "" {
 			cfg.Name = providerAnthropic
 		}
@@ -121,7 +121,7 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
 		return NewAnthropic(cfg), nil
-	case providerGemini, "google":
+	case providerGemini, providerGoogle:
 		if cfg.Name == "" {
 			cfg.Name = providerGemini
 		}
@@ -129,7 +129,7 @@ func NewProvider(providerType string, cfg Config) (Provider, error) {
 			cfg.APIKey = os.Getenv("GEMINI_API_KEY")
 		}
 		return NewGemini(cfg), nil
-	case providerOllama, "ollama_cloud":
+	case providerOllama, providerOllamaCloud:
 		if cfg.Name == "" {
 			cfg.Name = providerOllama
 		}

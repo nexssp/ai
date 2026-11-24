@@ -16,13 +16,13 @@ Set `LLM_PROVIDER` to any provider supported by `engine/llm`, and provide `LLM_M
 
 ## Typed actions
 
-The library exports `ai.prompt`, `ai.tool_specs`, `ai.tool_specs.list`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action has a typed contract. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
+The library exports `ai.prompt`, `ai.schemas.get`, `ai.schemas.list`, `ai.tool_specs`, `ai.tool_specs.list`, `ai.team`, `ai.decide`, `ai.cost.estimate`, and the bounded `ai.weights.adapters`, `ai.weights.inspect`, and `ai.weights.patch` actions. Each action has a typed contract. `ai.prompt` returns content, model/provider, token counts, usage, and explicitly carried IDs/context; it does not merge arbitrary Flow state fields. `ai.team` executes two or more declared role turns sequentially and returns typed role outputs and per-turn usage.
 
 ## Function tools from NFlow metadata
 
-Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-callable function only when it declares both `:tool-schema=SchemaName` and `:tool-description="..."`. The pipeline's name becomes the function name, the description comes from its modifier, and `ai.tool_specs` converts the referenced `@schema` into provider-ready parameters. Prefix the schema name with `!` (for example, `:tool-schema=!NoArguments`) to emit `additionalProperties: false`. This tool-argument schema is independent of `:in-schema` and `:out-schema`, so internal task envelopes and dispatch metadata need not be exposed to the model. A schema with an empty body, such as `@schema NoArguments {}`, represents a zero-property object.
+Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-callable function only when it declares both `:tool-schema=SchemaName` and `:tool-description="..."`. The pipeline's name becomes the function name, the description comes from its modifier, and `ai.tool_specs` converts the referenced `@schema` into provider-ready parameters. Prefix the schema name with `!` (for example, `:tool-schema=!NoArguments`) to emit `additionalProperties: false` and request strict provider-side argument enforcement. Add `:tool-result-schema=ResultSchema` to validate the host-produced tool result before it is sent back to the model; this result contract is never included in the vendor tool declaration. This tool-argument schema is independent of `:in-schema` and `:out-schema`, so internal task envelopes and dispatch metadata need not be exposed to the model. A schema with an empty body, such as `@schema NoArguments {}`, represents a zero-property object.
 
-`ai.tool_specs.list` returns the generated declarations as a typed `[]llm.ToolSpec`, ready to pass to `ai.prompt`. The original `ai.tool_specs` action remains available for map-based workflows: it preserves current state and adds `ai_tool_specs` to its dynamic map result. Prefer the list action when calling typed actions; a dynamic map projection is intentionally not treated as a statically typed tool slice.
+`ai.tool_specs.list` returns the generated declarations as a typed `[]llm.ToolSpec`, ready to pass to `ai.prompt`. The optional host-only `result_schema` is a JSON-shaped object within that typed declaration, so the pipeline can project tool specs without exposing methods as data. The original `ai.tool_specs` action remains available for map-based workflows: it preserves current state and adds `ai_tool_specs` to its dynamic map result. Prefer the list action when calling typed actions; a dynamic map projection is intentionally not treated as a statically typed tool slice.
 
 ```nflow
 @schema CountArguments {
@@ -40,7 +40,7 @@ Avoid repeating provider JSON in a prompt request. A pipeline becomes an LLM-cal
 @end
 ```
 
-Only explicitly annotated pipelines are exposed. The schema is compiled from NFlow metadata during materialization, and a missing schema or description is a compile-time error.
+Only explicitly annotated pipelines are exposed. The schema is compiled from NFlow metadata during materialization, and a missing schema or description is a compile-time error. `ai.schemas.get` and `ai.schemas.list` expose visible `@schema` declarations as recursive JSON-shaped JSON Schema contracts for `ai.prompt.output_schema` and other typed calls. Output contracts default to strict provider enforcement; set `output_schema_mode: "best_effort"` only when you accept local validation for unsupported or unknown provider/model capabilities. See the [provider capability matrix and schema rules](../docs/structured-outputs.md).
 
 ## Named LLM instances
 

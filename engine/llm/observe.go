@@ -54,6 +54,37 @@ func (p *ObservableProvider) SupportsToolCalls() bool {
 	return ok && provider.SupportsToolCalls()
 }
 
+func (p *ObservableProvider) SupportsToolChoice(choice ToolChoice) bool {
+	provider, ok := p.inner.(ToolChoiceProvider)
+	return ok && provider.SupportsToolChoice(choice)
+}
+
+func (p *ObservableProvider) Capabilities(model string) ProviderCapabilities {
+	provider, ok := p.inner.(CapabilityProvider)
+	if !ok {
+		return unknownCapabilities()
+	}
+	return provider.Capabilities(model)
+}
+
+func (p *ObservableProvider) SupportsOutputSchema(model string, schema JSONSchema, withTools bool) (supported bool, reason string) {
+	if provider, ok := p.inner.(OutputSchemaSupportProvider); ok {
+		return provider.SupportsOutputSchema(model, schema, withTools)
+	}
+	capabilities := p.Capabilities(model)
+	level := capabilities.OutputSchema
+	if withTools {
+		level = capabilities.OutputSchemaWithTools
+	}
+	if level != CapabilitySupported && level != CapabilityConditional {
+		return false, "wrapped provider capability is " + string(level)
+	}
+	if err := schema.ValidateDefinition(); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
 func (p *ObservableProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	model := req.Model
 	if model == "" {

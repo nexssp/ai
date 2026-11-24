@@ -16,16 +16,16 @@ import (
 )
 
 const (
-	toolSchemaModifierName      = "tool-schema"
-	toolDescriptionModifierName = "tool-description"
-	toolSpecsActionName         = "ai.tool_specs"
-	toolSpecsListActionName     = "ai.tool_specs.list"
-	toolSpecsFieldName          = "ai_tool_specs"
+	toolSchemaModifierName       = "tool-schema"
+	toolDescriptionModifierName  = "tool-description"
+	toolResultSchemaModifierName = "tool-result-schema"
+	toolSpecsActionName          = "ai.tool_specs"
+	toolSpecsListActionName      = "ai.tool_specs.list"
+	toolSpecsFieldName           = "ai_tool_specs"
 )
 
 // pipelineToolModifiers mark the subset of @pipeline declarations that may be
-// exposed to an LLM. The schema is separate from the pipeline's runtime input:
-// callers can keep orchestration fields out of the model-visible argument list.
+// exposed to an LLM. The schema is separate from the pipeline's runtime input.
 func pipelineToolModifiers() []compiler.Modifier {
 	return []compiler.Modifier{
 		compiler.WithUnique(compiler.String(toolSchemaModifierName, func(b *action.Builder[any, any], value string) *action.Builder[any, any] {
@@ -34,17 +34,24 @@ func pipelineToolModifiers() []compiler.Modifier {
 		compiler.WithUnique(compiler.String(toolDescriptionModifierName, func(b *action.Builder[any, any], value string) *action.Builder[any, any] {
 			return b.Tag("ai.tool_description:" + value)
 		})),
+		compiler.WithUnique(compiler.String(toolResultSchemaModifierName, func(b *action.Builder[any, any], value string) *action.Builder[any, any] {
+			return b.Tag("ai.tool_result_schema:" + value)
+		})),
 	}
 }
 
 func aiMaterializer(global GlobalOptions, builder providerBuilder) compiler.Materializer {
 	namedLLM := namedLLMMaterializer(global, builder)
 	toolSpecs := pipelineToolSpecsMaterializer()
+	schemaContracts := schemaContractsMaterializer()
 	return func(req compiler.MaterializeReq) error {
 		if err := namedLLM(req); err != nil {
 			return err
 		}
-		return toolSpecs(req)
+		if err := toolSpecs(req); err != nil {
+			return err
+		}
+		return schemaContracts(req)
 	}
 }
 
@@ -77,6 +84,57 @@ func pipelineToolSpecsMaterializer() compiler.Materializer {
 	}
 }
 
+type pipelineToolConfig struct {
+	schemaName       string
+	description      string
+	resultSchemaName string
+	hasSchema        bool
+	hasDescription   bool
+	hasResultSchema  bool
+}
+
+func (config *pipelineToolConfig) add(pipelineName, raw string) error {
+	name := compiler.ModifierName(raw)
+	_, value, hasValue := strings.Cut(raw, "=")
+	switch name {
+	case toolSchemaModifierName:
+		if err := requireToolModifierValue(pipelineName, toolSchemaModifierName, value, hasValue); err != nil {
+			return err
+		}
+		if config.hasSchema {
+			return fmt.Errorf("@pipeline %q: :%s may be specified only once", pipelineName, toolSchemaModifierName)
+		}
+		config.schemaName, config.hasSchema = strings.TrimSpace(value), true
+	case toolDescriptionModifierName:
+		if err := requireToolModifierValue(pipelineName, toolDescriptionModifierName, value, hasValue); err != nil {
+			return err
+		}
+		if config.hasDescription {
+			return fmt.Errorf("@pipeline %q: :%s may be specified only once", pipelineName, toolDescriptionModifierName)
+		}
+		config.description, config.hasDescription = strings.TrimSpace(value), true
+	case toolResultSchemaModifierName:
+		if err := requireToolModifierValue(pipelineName, toolResultSchemaModifierName, value, hasValue); err != nil {
+			return err
+		}
+		if config.hasResultSchema {
+			return fmt.Errorf("@pipeline %q: :%s may be specified only once", pipelineName, toolResultSchemaModifierName)
+		}
+		config.resultSchemaName, config.hasResultSchema = strings.TrimSpace(value), true
+	}
+	return nil
+}
+
+func requireToolModifierValue(pipelineName, modifier, value string, hasValue bool) error {
+	if hasValue && strings.TrimSpace(value) != "" {
+		return nil
+	}
+	if modifier == toolDescriptionModifierName {
+		return fmt.Errorf("@pipeline %q: :%s requires a description", pipelineName, modifier)
+	}
+	return fmt.Errorf("@pipeline %q: :%s requires a schema name", pipelineName, modifier)
+}
+
 func toolSpecsFromMeta(meta map[string]any) ([]llm.ToolSpec, error) {
 	if meta == nil {
 		return nil, nil
@@ -91,58 +149,76 @@ func toolSpecsFromMeta(meta map[string]any) ([]llm.ToolSpec, error) {
 
 	specs := make([]llm.ToolSpec, 0, len(names))
 	for _, pipelineName := range names {
-		var schemaName, description string
-		var hasSchema, hasDescription bool
-		for _, raw := range modifiers[pipelineName] {
-			name := compiler.ModifierName(raw)
-			_, value, hasValue := strings.Cut(raw, "=")
-			switch name {
-			case toolSchemaModifierName:
-				if !hasValue || strings.TrimSpace(value) == "" {
-					return nil, fmt.Errorf("@pipeline %q: :%s requires a schema name", pipelineName, toolSchemaModifierName)
-				}
-				if hasSchema {
-					return nil, fmt.Errorf("@pipeline %q: :%s may be specified only once", pipelineName, toolSchemaModifierName)
-				}
-				schemaName, hasSchema = strings.TrimSpace(value), true
-			case toolDescriptionModifierName:
-				if !hasValue || strings.TrimSpace(value) == "" {
-					return nil, fmt.Errorf("@pipeline %q: :%s requires a description", pipelineName, toolDescriptionModifierName)
-				}
-				if hasDescription {
-					return nil, fmt.Errorf("@pipeline %q: :%s may be specified only once", pipelineName, toolDescriptionModifierName)
-				}
-				description, hasDescription = strings.TrimSpace(value), true
-			}
+		config, err := pipelineToolConfigFromMeta(pipelineName, modifiers[pipelineName])
+		if err != nil {
+			return nil, err
 		}
-
-		if !hasSchema && !hasDescription {
-			continue
+		spec, exposed, err := pipelineToolSpecFromMeta(meta, pipelineName, config)
+		if err != nil {
+			return nil, err
 		}
-		if !hasSchema || !hasDescription {
-			return nil, fmt.Errorf("@pipeline %q: :%s and :%s must be declared together", pipelineName, toolSchemaModifierName, toolDescriptionModifierName)
+		if exposed {
+			specs = append(specs, spec)
 		}
-		strict := strings.HasPrefix(schemaName, "!")
-		schemaName = strings.TrimPrefix(schemaName, "!")
-		if schemaName == "" {
-			return nil, fmt.Errorf("@pipeline %q: :%s requires a schema name after the strictness marker", pipelineName, toolSchemaModifierName)
-		}
-		targetSchema, found := schemaext.ByName(meta, schemaName)
-		if !found {
-			return nil, fmt.Errorf("@pipeline %q: :%s=%s: unknown schema", pipelineName, toolSchemaModifierName, schemaName)
-		}
-		parameters := schemaext.ToJSONSchema(targetSchema)
-		if strict {
-			parameters["additionalProperties"] = false
-		}
-		specs = append(specs, llm.ToolSpec{
-			Type: "function",
-			Function: llm.FunctionSpec{
-				Name:        pipelineName,
-				Description: description,
-				Parameters:  parameters,
-			},
-		})
 	}
 	return specs, nil
+}
+
+func pipelineToolConfigFromMeta(pipelineName string, modifiers []string) (pipelineToolConfig, error) {
+	var config pipelineToolConfig
+	for _, raw := range modifiers {
+		if err := config.add(pipelineName, raw); err != nil {
+			return pipelineToolConfig{}, err
+		}
+	}
+	return config, nil
+}
+
+func pipelineToolSpecFromMeta(meta map[string]any, pipelineName string, config pipelineToolConfig) (llm.ToolSpec, bool, error) {
+	if !config.hasSchema && !config.hasDescription && !config.hasResultSchema {
+		return llm.ToolSpec{}, false, nil
+	}
+	if !config.hasSchema || !config.hasDescription {
+		return llm.ToolSpec{}, false, fmt.Errorf("@pipeline %q: :%s and :%s must be declared together", pipelineName, toolSchemaModifierName, toolDescriptionModifierName)
+	}
+	strict := strings.HasPrefix(config.schemaName, "!")
+	schemaName := strings.TrimPrefix(config.schemaName, "!")
+	if schemaName == "" {
+		return llm.ToolSpec{}, false, fmt.Errorf("@pipeline %q: :%s requires a schema name after the strictness marker", pipelineName, toolSchemaModifierName)
+	}
+	targetSchema, found := schemaext.ByName(meta, schemaName)
+	if !found {
+		return llm.ToolSpec{}, false, fmt.Errorf("@pipeline %q: :%s=%s: unknown schema", pipelineName, toolSchemaModifierName, schemaName)
+	}
+	parameters, err := flowJSONSchemaValue(flowSchemaToJSONSchema(targetSchema, strict))
+	if err != nil {
+		return llm.ToolSpec{}, false, fmt.Errorf("@pipeline %q: encode tool schema: %w", pipelineName, err)
+	}
+	var resultSchema map[string]any
+	if config.hasResultSchema {
+		resultSchema, err = toolResultSchemaFromMeta(meta, pipelineName, config)
+		if err != nil {
+			return llm.ToolSpec{}, false, err
+		}
+	}
+	return llm.ToolSpec{
+		Type: "function",
+		Function: llm.FunctionSpec{
+			Name: pipelineName, Description: config.description,
+			Parameters: parameters, Strict: strict, ResultSchema: resultSchema,
+		},
+	}, true, nil
+}
+
+func toolResultSchemaFromMeta(meta map[string]any, pipelineName string, config pipelineToolConfig) (map[string]any, error) {
+	target, found := schemaext.ByName(meta, config.resultSchemaName)
+	if !found {
+		return nil, fmt.Errorf("@pipeline %q: :%s=%s: unknown schema", pipelineName, toolResultSchemaModifierName, config.resultSchemaName)
+	}
+	converted := flowSchemaToJSONSchema(target, true)
+	value, err := flowJSONSchemaValue(converted)
+	if err != nil {
+		return nil, fmt.Errorf("@pipeline %q: encode tool result schema: %w", pipelineName, err)
+	}
+	return value, nil
 }

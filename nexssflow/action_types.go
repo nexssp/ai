@@ -27,36 +27,39 @@ type PromptRequest struct {
 	User     string        `json:"user,omitempty"`
 	System   string        `json:"system,omitempty"`
 	// Tools and ToolChoice require a provider that advertises non-streaming tool-call support.
-	Tools           []llm.ToolSpec        `json:"tools,omitempty"`
-	ToolChoice      llm.ToolChoice        `json:"tool_choice,omitempty"`
-	Provider        string                `json:"provider,omitempty"`
-	Model           string                `json:"model,omitempty"`
-	BaseURL         string                `json:"base_url,omitempty"`
-	MaxTokens       int                   `json:"max_tokens,omitempty"`
-	Temperature     float64               `json:"temperature,omitempty"`
-	JSONMode        bool                  `json:"json_mode,omitempty"`
-	ReasoningEffort llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
-	Fallback        *CandidateAttemptPlan `json:"fallback,omitempty"`
+	Tools            []llm.ToolSpec        `json:"tools,omitempty"`
+	ToolChoice       llm.ToolChoice        `json:"tool_choice,omitempty"`
+	Provider         string                `json:"provider,omitempty"`
+	Model            string                `json:"model,omitempty"`
+	BaseURL          string                `json:"base_url,omitempty"`
+	MaxTokens        int                   `json:"max_tokens,omitempty"`
+	Temperature      float64               `json:"temperature,omitempty"`
+	JSONMode         bool                  `json:"json_mode,omitempty"`
+	OutputSchema     *llm.JSONSchema       `json:"output_schema,omitempty"`
+	OutputSchemaMode llm.SchemaMode        `json:"output_schema_mode,omitempty"`
+	ReasoningEffort  llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
+	Fallback         *CandidateAttemptPlan `json:"fallback,omitempty"`
 }
 
 // PromptResult is one provider attempt. It intentionally does not merge the
 // entire incoming Flow state into the output; callers retain only declared,
 // inspectable fields and can use IDs to account attempts independently.
 type PromptResult struct {
-	CandidateID        string          `json:"candidate_id,omitempty"`
-	AttemptID          string          `json:"attempt_id,omitempty"`
-	RateCardID         string          `json:"rate_card_id,omitempty"`
-	ExpectedCurrency   *cost.Currency  `json:"expected_currency,omitempty"`
-	Context            json.RawMessage `json:"context,omitempty"`
-	Provider           string          `json:"provider"`
-	Content            string          `json:"content"`
-	ToolCalls          []llm.ToolCall  `json:"tool_calls,omitempty"`
-	Model              string          `json:"model"`
-	PromptTokens       int             `json:"prompt_tokens"`
-	CachedPromptTokens int             `json:"cached_prompt_tokens,omitempty"`
-	CompTokens         int             `json:"comp_tokens"`
-	TotalTokens        int             `json:"total_tokens"`
-	Usage              llm.Usage       `json:"usage"`
+	CandidateID        string                `json:"candidate_id,omitempty"`
+	AttemptID          string                `json:"attempt_id,omitempty"`
+	RateCardID         string                `json:"rate_card_id,omitempty"`
+	ExpectedCurrency   *cost.Currency        `json:"expected_currency,omitempty"`
+	Context            json.RawMessage       `json:"context,omitempty"`
+	Provider           string                `json:"provider"`
+	Content            string                `json:"content"`
+	ToolCalls          []llm.ToolCall        `json:"tool_calls,omitempty"`
+	SchemaEnforcement  llm.SchemaEnforcement `json:"schema_enforcement,omitempty"`
+	Model              string                `json:"model"`
+	PromptTokens       int                   `json:"prompt_tokens"`
+	CachedPromptTokens int                   `json:"cached_prompt_tokens,omitempty"`
+	CompTokens         int                   `json:"comp_tokens"`
+	TotalTokens        int                   `json:"total_tokens"`
+	Usage              llm.Usage             `json:"usage"`
 }
 
 // CandidateAttemptPlan is operator-supplied configuration for one candidate

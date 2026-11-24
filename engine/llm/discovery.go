@@ -45,7 +45,7 @@ func FetchModels(ctx context.Context, providerType, apiKey, baseURL string) ([]s
 			return nil, xerr.Validation("llm: openai-compatible model discovery requires a base URL")
 		}
 		return fetchOpenAIModels(ctx, providerType, apiKey, baseURL)
-	case providerOllama, "ollama_cloud":
+	case providerOllama, providerOllamaCloud:
 		return fetchOllamaModels(ctx, apiKey, baseURL)
 	case "typesafe":
 		return fetchTypeSafeModels(ctx, apiKey, baseURL)

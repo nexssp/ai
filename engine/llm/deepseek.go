@@ -32,6 +32,26 @@ func (p *DeepSeekProvider) SupportsToolCalls() bool {
 	return ok && provider.SupportsToolCalls()
 }
 
+func (p *DeepSeekProvider) SupportsToolChoice(choice ToolChoice) bool {
+	provider, ok := p.underlying.(ToolChoiceProvider)
+	return ok && provider.SupportsToolChoice(choice)
+}
+
+func (p *DeepSeekProvider) Capabilities(model string) ProviderCapabilities {
+	if source, ok := p.underlying.(CapabilityProvider); ok {
+		return source.Capabilities(model)
+	}
+	return unknownCapabilities()
+}
+
+func (p *DeepSeekProvider) SupportsOutputSchema(model string, schema JSONSchema, withTools bool) (supported bool, reason string) {
+	provider, ok := p.underlying.(OutputSchemaSupportProvider)
+	if !ok {
+		return false, "underlying adapter does not declare schema support"
+	}
+	return provider.SupportsOutputSchema(model, schema, withTools)
+}
+
 func (p *DeepSeekProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	res, err := p.underlying.Complete(ctx, req)
 	if err != nil {

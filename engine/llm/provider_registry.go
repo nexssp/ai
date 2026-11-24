@@ -13,7 +13,7 @@ func IsKnownProvider(name string) bool {
 	// A few additional canonical names map to the same backends but are
 	// not separate presets.
 	switch name {
-	case providerAnthropic, "claude", providerGemini, "google":
+	case providerAnthropic, providerClaude, providerGemini, providerGoogle, providerOllama, providerOllamaCloud:
 		return true
 	}
 	return false
@@ -26,7 +26,7 @@ func KnownProviders() []string {
 	for name := range Presets {
 		seen[name] = true
 	}
-	for _, name := range []string{providerAnthropic, "claude", providerGemini, "google"} {
+	for _, name := range []string{providerAnthropic, providerClaude, providerGemini, providerGoogle, providerOllama, providerOllamaCloud} {
 		seen[name] = true
 	}
 	out := make([]string, 0, len(seen))

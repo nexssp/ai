@@ -3,6 +3,7 @@ package nexssflow
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nexssp/cost"
 	"github.com/nexssp/kernel/xerr"
@@ -227,4 +228,165 @@ func TestPromptRejectsInvalidExplicitMessageHistoryBeforeDispatch(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestPromptForwardsAndValidatesOutputSchema(t *testing.T) {
+	closed := false
+	schema := llm.JSONSchema{
+		Type: "object",
+		Properties: map[string]llm.JSONSchema{
+			"name":     {Type: "string"},
+			"nickname": {Type: "string"},
+		},
+		Required:             []string{"name"},
+		AdditionalProperties: &closed,
+	}
+	provider := &schemaCapableFakeProvider{fakeProvider: &fakeProvider{response: llm.Response{
+		Content: `{"name":"Ada","nickname":null}`, Model: "schema-model",
+	}}}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+	value, err := act.DoAny(t.Context(), PromptRequest{User: "Return a name", OutputSchema: &schema})
+	if err != nil {
+		t.Fatalf("strict schema request: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("prompt result has type %T", value)
+	}
+	if provider.request.OutputSchema == nil || result.Content != `{"name":"Ada"}` || result.SchemaEnforcement != llm.SchemaEnforcementProvider {
+		t.Fatalf("schema was not forwarded, normalized, and reported: request=%+v result=%+v", provider.request, result)
+	}
+}
+
+func TestPromptSchemaAndToolChoiceSurviveObservableProvider(t *testing.T) {
+	closed := false
+	schema := llm.JSONSchema{Type: "object", Properties: map[string]llm.JSONSchema{"ok": {Type: "boolean"}}, Required: []string{"ok"}, AdditionalProperties: &closed}
+	inner := &schemaCapableFakeProvider{fakeProvider: &fakeProvider{response: llm.Response{Content: `{"ok":true}`}}}
+	provider := llm.NewObservableProvider(inner, func(string, string, string, int, int, int64, time.Duration, error) {})
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+	tool := llm.ToolSpec{Type: "function", Function: llm.FunctionSpec{Name: "noop", Parameters: llm.JSONSchema{Type: "object"}}}
+	if _, err := act.DoAny(t.Context(), PromptRequest{
+		User: "Return JSON", OutputSchema: &schema, Tools: []llm.ToolSpec{tool}, ToolChoice: llm.ToolChoiceRequired,
+	}); err != nil {
+		t.Fatalf("schema and tool-choice request through observable provider: %v", err)
+	}
+	if inner.calls != 1 || inner.request.OutputSchema == nil || inner.request.ToolChoice != llm.ToolChoiceRequired {
+		t.Fatalf("wrapped request was not preserved: calls=%d request=%+v", inner.calls, inner.request)
+	}
+}
+
+func TestPromptStrictAndBestEffortSchemaCapabilityPolicy(t *testing.T) {
+	closed := false
+	schema := llm.JSONSchema{Type: "object", Properties: map[string]llm.JSONSchema{"ok": {Type: "boolean"}}, Required: []string{"ok"}, AdditionalProperties: &closed}
+	strictProvider := &fakeProvider{response: llm.Response{Content: `{"ok":true}`}}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return strictProvider, nil })
+	if _, err := act.DoAny(t.Context(), PromptRequest{User: "Return JSON", OutputSchema: &schema}); err == nil {
+		t.Fatal("strict mode accepted a provider with unknown schema capability")
+	}
+	if strictProvider.calls != 0 {
+		t.Fatalf("unsupported strict schema dispatched %d provider calls", strictProvider.calls)
+	}
+
+	bestEffortProvider := &fakeProvider{response: llm.Response{Content: `{"ok":true}`}}
+	act = newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return bestEffortProvider, nil })
+	value, err := act.DoAny(t.Context(), PromptRequest{
+		User: "Return JSON", OutputSchema: &schema, OutputSchemaMode: llm.SchemaModeBestEffort,
+	})
+	if err != nil {
+		t.Fatalf("best-effort schema request: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("prompt result has type %T", value)
+	}
+	if bestEffortProvider.request.OutputSchema != nil || result.SchemaEnforcement != llm.SchemaEnforcementLocal {
+		t.Fatalf("best-effort was not explicitly local: request=%+v result=%+v", bestEffortProvider.request, result)
+	}
+
+	invalidProvider := &fakeProvider{response: llm.Response{Content: `{"ok":"yes"}`}}
+	act = newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return invalidProvider, nil })
+	if _, err := act.DoAny(t.Context(), PromptRequest{
+		User: "Return JSON", OutputSchema: &schema, OutputSchemaMode: llm.SchemaModeBestEffort,
+	}); err == nil {
+		t.Fatal("best-effort local validation accepted invalid output")
+	}
+}
+
+func TestPromptValidatesToolCallsAndHostResultsAtCompletionBoundary(t *testing.T) {
+	closed := false
+	argumentSchema := llm.JSONSchema{Type: "object", Properties: map[string]llm.JSONSchema{"count": {Type: "integer"}}, Required: []string{"count"}, AdditionalProperties: &closed}
+	tool := llm.ToolSpec{Type: "function", Function: llm.FunctionSpec{
+		Name: "count_words", Parameters: argumentSchema, ResultSchema: map[string]any{"type": "string"},
+	}}
+	badResponseProvider := &fakeProvider{response: llm.Response{ToolCalls: []llm.ToolCall{{
+		ID: "call-bad", Type: "function", Function: llm.FunctionCall{Name: "count_words", Arguments: `{}`},
+	}}}}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return badResponseProvider, nil })
+	if _, err := act.DoAny(t.Context(), PromptRequest{User: "Count", Tools: []llm.ToolSpec{tool}}); err == nil {
+		t.Fatal("invalid provider tool arguments reached the caller")
+	}
+	if badResponseProvider.calls != 1 {
+		t.Fatalf("response validation should follow the provider call, calls=%d", badResponseProvider.calls)
+	}
+
+	invalidHistoryProvider := &fakeProvider{}
+	act = newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return invalidHistoryProvider, nil })
+	_, err := act.DoAny(t.Context(), PromptRequest{
+		Tools: []llm.ToolSpec{tool}, Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "Count"},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "history", Type: "function", Function: llm.FunctionCall{Name: "count_words", Arguments: `{}`}}}},
+		},
+	})
+	if err == nil || invalidHistoryProvider.calls != 0 {
+		t.Fatalf("invalid historical arguments were not rejected before dispatch: err=%v calls=%d", err, invalidHistoryProvider.calls)
+	}
+
+	invalidResultProvider := &fakeProvider{}
+	act = newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return invalidResultProvider, nil })
+	_, err = act.DoAny(t.Context(), PromptRequest{
+		Tools: []llm.ToolSpec{tool}, Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "Count"},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "history", Type: "function", Function: llm.FunctionCall{Name: "count_words", Arguments: `{"count":2}`}}}},
+			{Role: llm.RoleTool, ToolCallID: "history", Name: "count_words", Content: `2`},
+		},
+	})
+	if err == nil || invalidResultProvider.calls != 0 {
+		t.Fatalf("invalid host result was not rejected before dispatch: err=%v calls=%d", err, invalidResultProvider.calls)
+	}
+}
+
+func TestPromptBestEffortDowngradesStrictToolArgumentsAndReportsLocalValidation(t *testing.T) {
+	closed := false
+	tool := llm.ToolSpec{Type: "function", Function: llm.FunctionSpec{
+		Name: "noop", Parameters: llm.JSONSchema{Type: "object", Properties: map[string]llm.JSONSchema{}, AdditionalProperties: &closed}, Strict: true,
+	}}
+	provider := &fakeProvider{response: llm.Response{ToolCalls: []llm.ToolCall{{
+		ID: "call-local", Type: "function", Function: llm.FunctionCall{Name: "noop", Arguments: `{}`},
+	}}}}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+	value, err := act.DoAny(t.Context(), PromptRequest{
+		User: "Use noop", Tools: []llm.ToolSpec{tool}, OutputSchemaMode: llm.SchemaModeBestEffort,
+	})
+	if err != nil {
+		t.Fatalf("best-effort tool validation: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("prompt result has type %T", value)
+	}
+	if provider.request.Tools[0].Function.Strict || result.SchemaEnforcement != llm.SchemaEnforcementLocal {
+		t.Fatalf("strict tool was not downgraded and locally validated: request=%+v result=%+v", provider.request, result)
+	}
+}
+
+type schemaCapableFakeProvider struct {
+	*fakeProvider
+}
+
+func (*schemaCapableFakeProvider) Capabilities(string) llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{OutputSchema: llm.CapabilityConditional, OutputSchemaWithTools: llm.CapabilityConditional, StrictToolArguments: llm.CapabilityConditional}
+}
+
+func (*schemaCapableFakeProvider) SupportsOutputSchema(_ string, schema llm.JSONSchema, _ bool) (supported bool, reason string) {
+	return schema.ValidateDefinition() == nil, "test schema rejected"
 }

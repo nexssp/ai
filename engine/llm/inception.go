@@ -33,6 +33,21 @@ func (p *InceptionProvider) SupportsToolCalls() bool {
 	return p.chat != nil && p.chat.SupportsToolCalls()
 }
 
+func (p *InceptionProvider) SupportsToolChoice(choice ToolChoice) bool {
+	return p.chat != nil && p.chat.SupportsToolChoice(choice)
+}
+
+func (p *InceptionProvider) Capabilities(model string) ProviderCapabilities {
+	return CapabilitiesForRoute(p.Name(), configuredModel(model, p.cfg.DefaultModel), p.cfg.BaseURL)
+}
+
+func (p *InceptionProvider) SupportsOutputSchema(model string, schema JSONSchema, withTools bool) (supported bool, reason string) {
+	if p.chat == nil {
+		return false, "underlying chat adapter is unavailable"
+	}
+	return p.chat.SupportsOutputSchema(model, schema, withTools)
+}
+
 func (p *InceptionProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	return p.chat.Complete(ctx, req)
 }

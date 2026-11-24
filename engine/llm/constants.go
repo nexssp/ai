@@ -2,8 +2,11 @@ package llm
 
 const (
 	providerAnthropic        = "anthropic"
+	providerClaude           = "claude"
 	providerGemini           = "gemini"
+	providerGoogle           = "google"
 	providerOllama           = "ollama"
+	providerOllamaCloud      = "ollama_cloud"
 	providerOpenAI           = "openai"
 	providerOpenAICompatible = "openai-compatible"
 	providerNVIDIA           = "nvidia"
@@ -12,6 +15,7 @@ const (
 	providerDeepSeek         = "deepseek"
 	providerXAI              = "xai"
 	providerInception        = "inception"
+	toolTypeFunction         = "function"
 	roleUser                 = "user"
 	roleModel                = "model"
 	jsonKeyModel             = "model"

@@ -3,9 +3,12 @@ package llm
 import "strconv"
 
 const (
-	schemaTypeObject = "object"
-	schemaTypeString = "string"
-	schemaTypeNumber = "number"
+	schemaTypeObject  = "object"
+	schemaTypeString  = "string"
+	schemaTypeNumber  = "number"
+	schemaTypeArray   = "array"
+	schemaTypeInteger = "integer"
+	schemaTypeBoolean = "boolean"
 )
 
 func decisionJSONSchema(req DecisionRequest) *JSONSchema {
@@ -68,14 +71,14 @@ func decisionAnswerSchema(question *DecisionQuestion) JSONSchema {
 			Type: schemaTypeObject,
 			Properties: map[string]JSONSchema{
 				"text":       {Type: schemaTypeString},
-				"start":      {Type: "integer"},
-				"end":        {Type: "integer"},
+				"start":      {Type: schemaTypeInteger},
+				"end":        {Type: schemaTypeInteger},
 				"confidence": {Type: schemaTypeNumber},
 			},
 			Required:             []string{"text", "start", "end", "confidence"},
 			AdditionalProperties: new(false),
 		}
-		spanList := JSONSchema{Type: "array", Items: &span}
+		spanList := JSONSchema{Type: schemaTypeArray, Items: &span}
 		spanProperties := make(map[string]JSONSchema, len(fields))
 		notStatedProperties := make(map[string]JSONSchema, len(fields))
 		for _, field := range fields {

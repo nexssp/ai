@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"iter"
+	"strings"
 	"time"
 
 	"github.com/nexssp/cost"
@@ -48,6 +49,9 @@ type FunctionSpec struct {
 	Description string `json:"description"`
 	Parameters  any    `json:"parameters"`
 	Example     any    `json:"example,omitempty"`
+	Strict      bool   `json:"strict,omitempty"`
+	// ResultSchema stays JSON-shaped so Flow projections expose data, not methods.
+	ResultSchema map[string]any `json:"result_schema,omitempty"`
 }
 
 // ToolChoice selects how a provider handles the supplied function tools.
@@ -60,10 +64,35 @@ const (
 	ToolChoiceRequired ToolChoice = "required"
 )
 
+// SchemaMode controls how ai.prompt handles provider-specific structured-output
+// support. Empty mode is treated as strict whenever an output schema is set.
+type SchemaMode string
+
+const (
+	SchemaModeStrict     SchemaMode = "strict"
+	SchemaModeBestEffort SchemaMode = "best_effort"
+)
+
+// SchemaEnforcement reports whether output structure was provider-constrained
+// or only checked locally after generation.
+type SchemaEnforcement string
+
+const (
+	SchemaEnforcementNone     SchemaEnforcement = ""
+	SchemaEnforcementProvider SchemaEnforcement = "provider"
+	SchemaEnforcementLocal    SchemaEnforcement = "local_validation"
+)
+
 // ToolCallingProvider advertises structured function-tool support for Complete.
 // Stream remains text-only unless a separate structured streaming API is added.
 type ToolCallingProvider interface {
 	SupportsToolCalls() bool
+}
+
+// ToolChoiceProvider reports whether a provider can honor a non-default tool
+// selection mode instead of silently accepting and ignoring it.
+type ToolChoiceProvider interface {
+	SupportsToolChoice(choice ToolChoice) bool
 }
 
 // ReasoningEffort is a provider/model-specific reasoning budget. Not all
@@ -85,7 +114,10 @@ const (
 // JSONSchema is the typed subset of JSON Schema used for provider-constrained
 // structured outputs. Provider adapters translate it to their native API shape.
 type JSONSchema struct {
-	Type                 string                `json:"type"`
+	Type                 string                `json:"-"`
+	Description          string                `json:"description,omitempty"`
+	Format               string                `json:"format,omitempty"`
+	Nullable             bool                  `json:"-"`
 	Properties           map[string]JSONSchema `json:"properties,omitempty"`
 	Required             []string              `json:"required,omitempty"`
 	Items                *JSONSchema           `json:"items,omitempty"`
@@ -108,7 +140,8 @@ type Request struct {
 	Temperature                 float64         `json:"temperature,omitempty"`
 	MaxTokens                   int             `json:"max_tokens,omitempty"`
 	JSONMode                    bool            `json:"json_mode,omitempty"`
-	OutputSchema                *JSONSchema     `json:"output_schema,omitempty"` // Optional schema constraint; currently applied by Anthropic Messages.
+	OutputSchema                *JSONSchema     `json:"output_schema,omitempty"`
+	OutputSchemaMode            SchemaMode      `json:"output_schema_mode,omitempty"`
 	ReasoningEffort             ReasoningEffort `json:"reasoning_effort,omitempty"`
 	Tools                       []ToolSpec      `json:"tools,omitempty"`
 	ToolChoice                  ToolChoice      `json:"tool_choice,omitempty"`
@@ -116,22 +149,28 @@ type Request struct {
 }
 
 type Response struct {
-	Content            string        `json:"content"`
-	ReasoningContent   string        `json:"reasoning_content,omitempty"`
-	Model              string        `json:"model"`
-	PromptTokens       int           `json:"prompt_tokens"`
-	CachedPromptTokens int           `json:"cached_prompt_tokens,omitempty"`
-	CompTokens         int           `json:"completion_tokens"`
-	FinishReason       string        `json:"finish_reason,omitempty"`
-	ToolCalls          []ToolCall    `json:"tool_calls,omitempty"`
-	Duration           time.Duration `json:"duration,omitempty"`
+	Content            string            `json:"content"`
+	ReasoningContent   string            `json:"reasoning_content,omitempty"`
+	Model              string            `json:"model"`
+	PromptTokens       int               `json:"prompt_tokens"`
+	CachedPromptTokens int               `json:"cached_prompt_tokens,omitempty"`
+	CompTokens         int               `json:"completion_tokens"`
+	FinishReason       string            `json:"finish_reason,omitempty"`
+	ToolCalls          []ToolCall        `json:"tool_calls,omitempty"`
+	SchemaEnforcement  SchemaEnforcement `json:"schema_enforcement,omitempty"`
+	Duration           time.Duration     `json:"duration,omitempty"`
 }
 
 // Truncated reports whether the provider stopped because it hit the
 // max_tokens ceiling. Callers should treat empty Content with
 // Truncated()==true as "raise the limit", not "model failed".
 func (r Response) Truncated() bool {
-	return r.FinishReason == "length"
+	switch strings.ToLower(r.FinishReason) {
+	case "length", "max_tokens":
+		return true
+	default:
+		return false
+	}
 }
 
 // CostMicros returns the cost of this turn in micro-units of the currency

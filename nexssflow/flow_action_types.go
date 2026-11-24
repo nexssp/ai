@@ -149,6 +149,8 @@ type flowPromptRequest struct {
 	MaxTokens          int                       `json:"max_tokens,omitempty"`
 	Temperature        *float64                  `json:"temperature,omitempty"`
 	JSONMode           bool                      `json:"json_mode,omitempty"`
+	OutputSchema       flowJSONObject            `json:"output_schema,omitempty"`
+	OutputSchemaMode   llm.SchemaMode            `json:"output_schema_mode,omitempty"`
 	ReasoningEffort    llm.ReasoningEffort       `json:"reasoning_effort,omitempty"`
 	Fallback           *flowCandidateAttemptPlan `json:"fallback,omitempty"`
 }
@@ -161,6 +163,21 @@ func (request flowPromptRequest) toDomain() (PromptRequest, error) {
 	contextJSON, err := flowJSONRawMessage(request.Context, "context")
 	if err != nil {
 		return PromptRequest{}, err
+	}
+	var outputSchema *llm.JSONSchema
+	if request.OutputSchema != nil {
+		outputSchemaJSON, err := flowJSONRawMessage(request.OutputSchema, "output_schema")
+		if err != nil {
+			return PromptRequest{}, err
+		}
+		var schema llm.JSONSchema
+		if err := json.Unmarshal(outputSchemaJSON, &schema); err != nil {
+			return PromptRequest{}, fmt.Errorf("output_schema must be a supported JSON Schema: %w", err)
+		}
+		if err := schema.ValidateDefinition(); err != nil {
+			return PromptRequest{}, fmt.Errorf("output_schema: %w", err)
+		}
+		outputSchema = &schema
 	}
 	var fallback *CandidateAttemptPlan
 	if request.Fallback != nil {
@@ -194,6 +211,8 @@ func (request flowPromptRequest) toDomain() (PromptRequest, error) {
 		MaxTokens:          request.MaxTokens,
 		Temperature:        optionalFloat64(request.Temperature),
 		JSONMode:           request.JSONMode,
+		OutputSchema:       outputSchema,
+		OutputSchemaMode:   request.OutputSchemaMode,
 		ReasoningEffort:    request.ReasoningEffort,
 		Fallback:           fallback,
 	}, nil

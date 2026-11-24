@@ -28,13 +28,32 @@ type openAIRequestPayload struct {
 	MaxTokens       int                   `json:"max_tokens,omitempty"`
 	ReasoningEffort ReasoningEffort       `json:"reasoning_effort,omitempty"`
 	ResponseFormat  *openAIResponseFormat `json:"response_format,omitempty"`
-	Tools           []ToolSpec            `json:"tools,omitempty"`
+	Tools           []openAITool          `json:"tools,omitempty"`
 	ToolChoice      ToolChoice            `json:"tool_choice,omitempty"`
 	Stream          bool                  `json:"stream,omitempty"`
 }
 
 type openAIResponseFormat struct {
-	Type string `json:"type"`
+	Type       string                  `json:"type"`
+	JSONSchema *openAIJSONSchemaFormat `json:"json_schema,omitempty"`
+}
+
+type openAIJSONSchemaFormat struct {
+	Name   string     `json:"name"`
+	Schema JSONSchema `json:"schema"`
+	Strict bool       `json:"strict"`
+}
+
+type openAITool struct {
+	Type     string             `json:"type"`
+	Function openAIFunctionSpec `json:"function"`
+}
+
+type openAIFunctionSpec struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters"`
+	Strict      bool   `json:"strict,omitempty"`
 }
 
 // openAIWireResponse captures reasoning_content (DeepSeek, vLLM, LMStudio,
@@ -96,16 +115,25 @@ func NewOpenAI(cfg Config) *OpenAIProvider {
 			return Response{}, xerr.Validation("llm: model is required in the request or provider configuration")
 		}
 
+		tools, err := openAITools(req.Tools)
+		if err != nil {
+			return Response{}, err
+		}
 		payload := openAIRequestPayload{
 			Model: req.Model, Messages: req.Messages, Temperature: req.Temperature,
 			MaxTokens: req.MaxTokens, ReasoningEffort: req.ReasoningEffort,
-			ToolChoice: req.ToolChoice,
+			ToolChoice: req.ToolChoice, Tools: tools,
 		}
-		if req.JSONMode {
+		if req.OutputSchema != nil {
+			if schemaErr := ValidateOpenAIStrictSchema(*req.OutputSchema); schemaErr != nil {
+				return Response{}, xerr.Validation("llm: output schema is not representable in OpenAI strict mode: " + schemaErr.Error())
+			}
+			payload.ResponseFormat = &openAIResponseFormat{
+				Type:       "json_schema",
+				JSONSchema: &openAIJSONSchemaFormat{Name: "assistant_output", Schema: OpenAIStrictSchema(*req.OutputSchema), Strict: true},
+			}
+		} else if req.JSONMode {
 			payload.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
-		}
-		if len(req.Tools) > 0 {
-			payload.Tools = req.Tools
 		}
 
 		headers := map[string]string{}
@@ -165,6 +193,52 @@ func (p *OpenAIProvider) Name() string {
 
 func (p *OpenAIProvider) SupportsToolCalls() bool { return true }
 
+func (p *OpenAIProvider) SupportsToolChoice(choice ToolChoice) bool {
+	return choice == ToolChoiceAuto || choice == ToolChoiceNone || choice == ToolChoiceRequired
+}
+
+func (p *OpenAIProvider) Capabilities(model string) ProviderCapabilities {
+	return CapabilitiesForRoute(p.Name(), configuredModel(model, p.cfg.DefaultModel), p.cfg.BaseURL)
+}
+
+func (p *OpenAIProvider) SupportsOutputSchema(model string, schema JSONSchema, withTools bool) (supported bool, reason string) {
+	capabilities := p.Capabilities(model)
+	level := capabilities.OutputSchema
+	if withTools {
+		level = capabilities.OutputSchemaWithTools
+	}
+	if level != CapabilitySupported && level != CapabilityConditional {
+		return false, "route capability is " + string(level)
+	}
+	if err := ValidateOpenAIStrictSchema(schema); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+func openAITools(specs []ToolSpec) ([]openAITool, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	out := make([]openAITool, 0, len(specs))
+	for _, spec := range specs {
+		function := openAIFunctionSpec{Name: spec.Function.Name, Description: spec.Function.Description, Parameters: spec.Function.Parameters}
+		if spec.Function.Strict {
+			schema, err := ParseJSONSchema(spec.Function.Parameters)
+			if err != nil {
+				return nil, err
+			}
+			if err := ValidateOpenAIStrictSchema(schema); err != nil {
+				return nil, xerr.Validation("llm: strict tool schema is not representable: " + err.Error())
+			}
+			function.Parameters = OpenAIStrictSchema(schema)
+			function.Strict = true
+		}
+		out = append(out, openAITool{Type: spec.Type, Function: function})
+	}
+	return out, nil
+}
+
 func (p *OpenAIProvider) Complete(ctx context.Context, req Request) (Response, error) {
 	if req.Model == "" && p.cfg.DefaultModel == "" {
 		return Response{}, xerr.Validation("llm: model is required in the request or provider configuration")
@@ -173,6 +247,9 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req Request) (Response, e
 }
 
 func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[string, error], error) {
+	if req.OutputSchema != nil || len(req.Tools) > 0 {
+		return nil, xerr.Validation("llm: OpenAI-compatible structured outputs and tool calls are not supported by the text-only streaming adapter")
+	}
 	if req.Model == "" {
 		req.Model = p.cfg.DefaultModel
 	}
@@ -183,6 +260,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request) (iter.Seq2[str
 	payload := openAIRequestPayload{
 		Model: req.Model, Messages: req.Messages, Temperature: req.Temperature,
 		ReasoningEffort: req.ReasoningEffort, Stream: true,
+	}
+	if req.JSONMode {
+		payload.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
 	}
 
 	bodyBytes, err := p.codec.Marshal(payload)
