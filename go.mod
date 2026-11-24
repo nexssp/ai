@@ -4,23 +4,23 @@ go 1.27.4
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/nexssp/cost v0.7.0
-	github.com/nexssp/flow v0.100.1
-	github.com/nexssp/kernel v0.40.3
-	github.com/nexssp/transport v0.19.1
-	github.com/redis/go-redis/v9 v9.23.0
+	github.com/nexssp/cost v0.8.0
+	github.com/nexssp/flow v0.102.1
+	github.com/nexssp/kernel v1.0.0
+	github.com/nexssp/transport v0.20.0
+	github.com/redis/go-redis/v9 v9.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/expr-lang/expr v1.17.8 // indirect
+	github.com/expr-lang/expr v1.18.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
 	github.com/go-playground/validator/v10 v10.30.6 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
-	github.com/nexssp/validation v0.6.0 // indirect
+	github.com/nexssp/validation v0.7.0 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
