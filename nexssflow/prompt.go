@@ -2,6 +2,7 @@ package nexssflow
 
 import (
 	"context"
+	"os"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
@@ -29,6 +30,9 @@ func newPromptActionWith(global GlobalOptions, build providerBuilder) *action.Bu
 		}
 		if err := validatePromptMessages(req); err != nil {
 			return PromptResult{}, err
+		}
+		if req.Stream && req.Model == "" {
+			req.Model = firstNonEmpty(global.DefaultModel, os.Getenv("LLM_MODEL"))
 		}
 		if build == nil {
 			return PromptResult{}, xerr.Internal("ai.prompt: provider builder is unavailable")

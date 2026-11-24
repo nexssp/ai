@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+type streamSinkContextKey struct{}
+
+// WithStreamSink attaches a run-scoped sink for token events.
+func WithStreamSink(ctx context.Context, sink StreamSink) context.Context {
+	return context.WithValue(ctx, streamSinkContextKey{}, sink)
+}
+
+// StreamSinkFromContext returns the run-scoped sink, if one was attached.
+func StreamSinkFromContext(ctx context.Context) (StreamSink, bool) {
+	sink, ok := ctx.Value(streamSinkContextKey{}).(StreamSink)
+	return sink, ok && sink != nil
+}
+
 type StreamEventKind uint8
 
 const (

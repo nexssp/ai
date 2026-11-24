@@ -1,7 +1,9 @@
 package nexssflow
 
 import (
+	"context"
 	"errors"
+	"iter"
 	"testing"
 	"time"
 
@@ -389,4 +391,146 @@ func (*schemaCapableFakeProvider) Capabilities(string) llm.ProviderCapabilities 
 
 func (*schemaCapableFakeProvider) SupportsOutputSchema(_ string, schema llm.JSONSchema, _ bool) (supported bool, reason string) {
 	return schema.ValidateDefinition() == nil, "test schema rejected"
+}
+
+type promptStreamFakeProvider struct {
+	*fakeProvider
+	chunks        []string
+	streamErr     error
+	streamRequest llm.Request
+	streamCalls   int
+}
+
+func (provider *promptStreamFakeProvider) Stream(_ context.Context, request llm.Request) (iter.Seq2[string, error], error) {
+	provider.streamRequest = request
+	provider.streamCalls++
+	return func(yield func(string, error) bool) {
+		for _, chunk := range provider.chunks {
+			if !yield(chunk, nil) {
+				return
+			}
+		}
+		if provider.streamErr != nil {
+			yield("", provider.streamErr)
+		}
+	}, nil
+}
+
+type promptRecordingSink struct {
+	events []llm.StreamEvent
+}
+
+func (sink *promptRecordingSink) Emit(_ context.Context, event llm.StreamEvent) error {
+	sink.events = append(sink.events, event)
+	return nil
+}
+
+func TestPromptStreamsTextAndEmitsTokenDeltas(t *testing.T) {
+	provider := &promptStreamFakeProvider{fakeProvider: &fakeProvider{}, chunks: []string{"Hello", " world"}}
+	sink := &promptRecordingSink{}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+
+	value, err := act.DoAny(llm.WithStreamSink(t.Context(), sink), PromptRequest{
+		Model: "stream-model", User: "Explain streaming.", Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("ai.prompt streaming: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("result type = %T, want PromptResult", value)
+	}
+	if result.Content != "Hello world" || result.Model != "stream-model" {
+		t.Fatalf("stream result = %+v, want accumulated content and requested model", result)
+	}
+	if result.UsageAvailable || result.Usage.CostKnown {
+		t.Fatalf("stream usage = %+v (available=%v), want unavailable usage and unknown cost", result.Usage, result.UsageAvailable)
+	}
+	if provider.calls != 0 || provider.streamCalls != 1 {
+		t.Fatalf("provider calls = Complete:%d Stream:%d, want Complete:0 Stream:1", provider.calls, provider.streamCalls)
+	}
+	if provider.streamRequest.Model != "stream-model" || len(provider.streamRequest.Tools) != 0 {
+		t.Fatalf("stream request = %+v, want model without tools", provider.streamRequest)
+	}
+	if len(sink.events) != 2 || sink.events[0].Kind != llm.EventTokenDelta || sink.events[0].Delta != "Hello" || sink.events[1].Delta != " world" {
+		t.Fatalf("events = %+v, want the two provider token deltas", sink.events)
+	}
+}
+
+func TestPromptStreamUsesConfiguredDefaultModel(t *testing.T) {
+	provider := &promptStreamFakeProvider{fakeProvider: &fakeProvider{}, chunks: []string{"answer"}}
+	act := newPromptActionWith(GlobalOptions{DefaultModel: "configured-stream-model"}, func(GlobalOptions, LLMDecl) (llm.Provider, error) {
+		return provider, nil
+	})
+
+	value, err := act.DoAny(t.Context(), flowPromptRequest{User: "Answer this.", Stream: true})
+	if err != nil {
+		t.Fatalf("ai.prompt streaming with default model: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("result type = %T, want PromptResult", value)
+	}
+	if result.Model != "configured-stream-model" || provider.streamRequest.Model != "configured-stream-model" {
+		t.Fatalf("result model=%q request model=%q, want configured-stream-model", result.Model, provider.streamRequest.Model)
+	}
+}
+
+func TestPromptPricedStreamLeavesUsageAndCostUnknown(t *testing.T) {
+	previous := llm.GlobalCatalog
+	llm.GlobalCatalog = llm.NewPriceCatalog()
+	t.Cleanup(func() { llm.GlobalCatalog = previous })
+	if err := llm.GlobalCatalog.Register("priced-stream-model", llm.PriceCard{
+		RateCardID: "stream-eur-card",
+		Currency:   cost.EUR,
+		Peak:       llm.Price{PromptPer1k: 1, CompPer1k: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := cost.EUR
+	provider := &promptStreamFakeProvider{fakeProvider: &fakeProvider{}, chunks: []string{"answer"}}
+	act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+	value, err := act.DoAny(t.Context(), PromptRequest{
+		Model: "priced-stream-model", RateCardID: "stream-eur-card", ExpectedCurrency: &expected,
+		PromptTokens: 10, CompletionTokens: 5, User: "Answer this.", Stream: true,
+	})
+	if err != nil {
+		t.Fatalf("ai.prompt priced streaming: %v", err)
+	}
+	result, ok := value.(PromptResult)
+	if !ok {
+		t.Fatalf("result type = %T, want PromptResult", value)
+	}
+	if result.UsageAvailable || result.Usage.CostKnown || result.Usage.CostMicro != 0 {
+		t.Fatalf("stream reported usage or cost: %+v (available=%v)", result.Usage, result.UsageAvailable)
+	}
+}
+
+func TestPromptRejectsStructuredStreamingBeforeProviderDispatch(t *testing.T) {
+	for _, request := range []PromptRequest{
+		{User: "Use a tool.", Stream: true, Tools: []llm.ToolSpec{{Type: "function", Function: llm.FunctionSpec{Name: "noop", Parameters: map[string]any{"type": "object"}}}}},
+		{User: "Return JSON.", Stream: true, OutputSchema: &llm.JSONSchema{Type: "object"}},
+	} {
+		provider := &promptStreamFakeProvider{fakeProvider: &fakeProvider{}}
+		act := newPromptActionWith(GlobalOptions{}, func(GlobalOptions, LLMDecl) (llm.Provider, error) { return provider, nil })
+		_, err := act.DoAny(t.Context(), request)
+		var appErr *xerr.AppError
+		if !errors.As(err, &appErr) || appErr.Kind != xerr.KindValidation {
+			t.Fatalf("structured streaming error = %v, want terminal Validation", err)
+		}
+		if provider.calls != 0 || provider.streamCalls != 0 {
+			t.Fatalf("provider calls = Complete:%d Stream:%d, want zero", provider.calls, provider.streamCalls)
+		}
+	}
+}
+
+func TestFlowPromptRequestCarriesStreamFlag(t *testing.T) {
+	request, err := (flowPromptRequest{User: "Answer this.", Stream: true}).toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Stream {
+		t.Fatal("stream flag was not carried from the NFlow request")
+	}
 }

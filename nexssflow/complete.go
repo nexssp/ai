@@ -3,6 +3,7 @@ package nexssflow
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/nexssp/kernel/xerr"
 
@@ -94,6 +95,9 @@ func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (Pr
 	if providerErr := requireProvider(provider); providerErr != nil {
 		return PromptResult{}, providerErr
 	}
+	if req.Stream && (len(req.Tools) > 0 || req.OutputSchema != nil) {
+		return PromptResult{}, xerr.Validation("ai.prompt: streaming supports text-only responses without tools or output_schema")
+	}
 	messages, err := prepareCompletionMessages(provider, req)
 	if err != nil {
 		return PromptResult{}, err
@@ -106,12 +110,48 @@ func complete(ctx context.Context, provider llm.Provider, req PromptRequest) (Pr
 	if err != nil {
 		return PromptResult{}, err
 	}
+	if req.Stream {
+		return streamCompletion(ctx, provider, req, mode, messages, tools, outputSchema)
+	}
 
 	response, err := provider.Complete(ctx, requestForCompletion(req, mode, messages, tools, outputSchema))
 	if err != nil {
 		return PromptResult{}, completionError(err)
 	}
-	return finishCompletion(provider, req, response, tools, outputSchema, priced, localToolValidation || localOutputValidation)
+	return finishCompletion(provider, req, response, tools, outputSchema, priced, localToolValidation || localOutputValidation, true)
+}
+
+func streamCompletion(ctx context.Context, provider llm.Provider, req PromptRequest, mode llm.SchemaMode, messages []llm.Message, tools []llm.ToolSpec, outputSchema *llm.JSONSchema) (PromptResult, error) {
+	sequence, err := provider.Stream(ctx, requestForCompletion(req, mode, messages, tools, outputSchema))
+	if err != nil {
+		return PromptResult{}, completionError(err)
+	}
+	if sequence == nil {
+		return PromptResult{}, xerr.Internal("ai.prompt: provider returned a nil stream")
+	}
+
+	sink := streamSinkFor(ctx)
+	var content strings.Builder
+	var sequenceNumber uint64
+	for delta, streamErr := range sequence {
+		if streamErr != nil {
+			return PromptResult{}, completionError(streamErr)
+		}
+		content.WriteString(delta)
+		if sink != nil && delta != "" {
+			if err := sink.Emit(ctx, llm.StreamEvent{
+				Sequence: sequenceNumber,
+				Time:     time.Now(),
+				Kind:     llm.EventTokenDelta,
+				Action:   "ai.prompt",
+				Delta:    delta,
+			}); err != nil {
+				return PromptResult{}, completionError(err)
+			}
+			sequenceNumber++
+		}
+	}
+	return finishCompletion(provider, req, llm.Response{Model: req.Model, Content: content.String()}, tools, outputSchema, false, false, false)
 }
 
 func validatePricingAndLimits(req PromptRequest) (bool, error) {
@@ -215,7 +255,7 @@ func requestForCompletion(req PromptRequest, mode llm.SchemaMode, messages []llm
 	}
 }
 
-func finishCompletion(provider llm.Provider, req PromptRequest, response llm.Response, tools []llm.ToolSpec, outputSchema *llm.JSONSchema, priced, localValidation bool) (PromptResult, error) {
+func finishCompletion(provider llm.Provider, req PromptRequest, response llm.Response, tools []llm.ToolSpec, outputSchema *llm.JSONSchema, priced, localValidation, usageAvailable bool) (PromptResult, error) {
 	if err := llm.ValidateAndNormalizeToolCalls(response.ToolCalls, tools); err != nil {
 		return PromptResult{}, xerr.Validation("ai.prompt: provider returned invalid tool calls: " + err.Error())
 	}
@@ -244,9 +284,12 @@ func finishCompletion(provider llm.Provider, req PromptRequest, response llm.Res
 		model = req.Model
 	}
 	response.Model = model
-	usage := llm.FromResponse(response)
-	if priced {
-		usage = llm.FromResponseForRateCard(response, req.RateCardID, *req.ExpectedCurrency)
+	var usage llm.Usage
+	if usageAvailable {
+		usage = llm.FromResponse(response)
+		if priced {
+			usage = llm.FromResponseForRateCard(response, req.RateCardID, *req.ExpectedCurrency)
+		}
 	}
 	return PromptResult{
 		CandidateID: req.CandidateID, AttemptID: req.AttemptID, RateCardID: req.RateCardID,
@@ -254,6 +297,6 @@ func finishCompletion(provider llm.Provider, req PromptRequest, response llm.Res
 		Provider: provider.Name(), Content: response.Content, ToolCalls: response.ToolCalls,
 		SchemaEnforcement: enforcement, Model: model, PromptTokens: response.PromptTokens,
 		CachedPromptTokens: response.CachedPromptTokens, CompTokens: response.CompTokens,
-		TotalTokens: response.PromptTokens + response.CompTokens, Usage: usage,
+		TotalTokens: response.PromptTokens + response.CompTokens, UsageAvailable: usageAvailable, Usage: usage,
 	}, nil
 }

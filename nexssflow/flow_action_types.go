@@ -149,6 +149,7 @@ type flowPromptRequest struct {
 	MaxTokens          int                       `json:"max_tokens,omitempty"`
 	Temperature        *float64                  `json:"temperature,omitempty"`
 	JSONMode           bool                      `json:"json_mode,omitempty"`
+	Stream             bool                      `json:"stream,omitempty"`
 	OutputSchema       flowJSONObject            `json:"output_schema,omitempty"`
 	OutputSchemaMode   llm.SchemaMode            `json:"output_schema_mode,omitempty"`
 	ReasoningEffort    llm.ReasoningEffort       `json:"reasoning_effort,omitempty"`
@@ -211,6 +212,7 @@ func (request flowPromptRequest) toDomain() (PromptRequest, error) {
 		MaxTokens:          request.MaxTokens,
 		Temperature:        optionalFloat64(request.Temperature),
 		JSONMode:           request.JSONMode,
+		Stream:             request.Stream,
 		OutputSchema:       outputSchema,
 		OutputSchemaMode:   request.OutputSchemaMode,
 		ReasoningEffort:    request.ReasoningEffort,

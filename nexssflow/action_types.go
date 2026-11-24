@@ -35,6 +35,7 @@ type PromptRequest struct {
 	MaxTokens        int                   `json:"max_tokens,omitempty"`
 	Temperature      float64               `json:"temperature,omitempty"`
 	JSONMode         bool                  `json:"json_mode,omitempty"`
+	Stream           bool                  `json:"stream,omitempty"`
 	OutputSchema     *llm.JSONSchema       `json:"output_schema,omitempty"`
 	OutputSchemaMode llm.SchemaMode        `json:"output_schema_mode,omitempty"`
 	ReasoningEffort  llm.ReasoningEffort   `json:"reasoning_effort,omitempty"`
@@ -59,6 +60,7 @@ type PromptResult struct {
 	CachedPromptTokens int                   `json:"cached_prompt_tokens,omitempty"`
 	CompTokens         int                   `json:"comp_tokens"`
 	TotalTokens        int                   `json:"total_tokens"`
+	UsageAvailable     bool                  `json:"usage_available"`
 	Usage              llm.Usage             `json:"usage"`
 }
 
