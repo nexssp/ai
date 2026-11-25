@@ -5,9 +5,9 @@ go 1.27.4
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/nexssp/cost v0.8.0
-	github.com/nexssp/flow v0.103.0
+	github.com/nexssp/flow v0.105.0
 	github.com/nexssp/kernel v1.0.0
-	github.com/nexssp/transport v0.21.0
+	github.com/nexssp/transport v0.22.1
 	github.com/redis/go-redis/v9 v9.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
